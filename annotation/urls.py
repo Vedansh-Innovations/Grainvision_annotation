@@ -16,6 +16,7 @@ urlpatterns = [
     path("<uuid:pk>/canvas/", views.canvas, name="canvas"),
     path("<uuid:pk>/label/", views.label_particle, name="label_particle"),
     path("<uuid:pk>/particle/add/", views.add_particle, name="add_particle"),
+    path("<uuid:pk>/particle/edit/", views.edit_particle, name="edit_particle"),
     path("<uuid:pk>/particle/delete/", views.delete_particle, name="delete_particle"),
     # Step 4 — review & submit
     path("<uuid:pk>/review/", views.pre_submit, name="pre_submit"),

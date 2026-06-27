@@ -324,13 +324,39 @@ def add_particle(request, pk):
     polygon = data.get("polygon")
     if not polygon or len(polygon) < 3:
         return HttpResponseBadRequest("Polygon needs at least 3 points.")
+    label = data.get("label")
+    if label not in ParticleLabel.values:
+        label = ParticleLabel.UNLABELED
     next_id = (sub.particles.order_by("-particle_id")
                .values_list("particle_id", flat=True).first() or 0) + 1
     p = Particle.objects.create(
         submission=sub, particle_id=next_id, polygon=polygon,
-        label=ParticleLabel.UNLABELED, origin=ParticleOrigin.USER, boundary_edited=True,
+        label=label, origin=ParticleOrigin.USER, boundary_edited=True,
     )
-    return JsonResponse({"ok": True, "id": p.id, "particle_id": p.particle_id})
+    return JsonResponse({
+        "ok": True, "id": p.id, "particle_id": p.particle_id,
+        "label": p.label, "color": LABEL_COLORS[ParticleLabel(p.label)],
+        "remaining": sub.unlabeled_count,
+    })
+
+
+@login_required
+@role_required(is_assayer)
+@require_POST
+def edit_particle(request, pk):
+    """Update a particle's polygon geometry (vertex drag / box-ellipse resize)."""
+    sub = get_object_or_404(Submission, pk=pk)
+    if not _owned(request, sub) or not _editable(sub):
+        return HttpResponseBadRequest("Not editable.")
+    data = json.loads(request.body or "{}")
+    polygon = data.get("polygon")
+    if not polygon or len(polygon) < 3:
+        return HttpResponseBadRequest("Polygon needs at least 3 points.")
+    p = get_object_or_404(Particle, id=data.get("particle_pk"), submission=sub)
+    p.polygon = polygon
+    p.boundary_edited = True
+    p.save(update_fields=["polygon", "boundary_edited"])
+    return JsonResponse({"ok": True})
 
 
 @login_required

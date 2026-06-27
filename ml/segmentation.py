@@ -132,29 +132,75 @@ def _segment_remote(crop_bgr, url, min_area, max_area):
 
 # ── Stage 2 (fallback): Otsu + Watershed ──────────────────────────
 def _segment_watershed(crop_bgr, plate_mask, min_area, max_area):
+    """Per-grain instance segmentation with classic CV.
+
+    Strategy: threshold grains -> distance transform -> find ONE local-maximum
+    marker per grain (so touching grains get separate markers) -> watershed.
+    The grain size is estimated from the isolated grains in the image, so the
+    marker spacing adapts to the commodity instead of a fixed global cutoff.
+    """
+    import math
+
+    from scipy import ndimage as ndi
+    from skimage.feature import peak_local_max
+    from skimage.segmentation import watershed as sk_watershed
+
     gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
     _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    th = cv2.bitwise_and(th, plate_mask)
+    if plate_mask is not None:
+        # Pull in from the rim a little so the metallic edge / shadow ring
+        # isn't segmented as a giant "grain".
+        er = max(4, int(0.025 * min(crop_bgr.shape[:2])))
+        pm = cv2.erode(
+            plate_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (er, er))
+        )
+        th = cv2.bitwise_and(th, pm)
 
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    opened = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, iterations=2)
-    closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=1)
+    th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, iterations=1)
+    th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=1)
+    if int((th > 0).sum()) == 0:
+        return []
 
-    sure_bg = cv2.dilate(closed, kernel, iterations=3)
-    dist = cv2.distanceTransform(closed, cv2.DIST_L2, 5)
-    _, sure_fg = cv2.threshold(dist, 0.45 * dist.max(), 255, 0)
-    sure_fg = sure_fg.astype(np.uint8)
-    unknown = cv2.subtract(sure_bg, sure_fg)
+    # Estimate a single grain's radius from the smaller connected components
+    # (isolated grains are small; clusters are large -> low percentile ~ 1 grain).
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(th, connectivity=8)
+    areas = stats[1:, cv2.CC_STAT_AREA].astype(float)
+    areas = areas[(areas >= max(min_area, 8)) & (areas <= max_area)]
+    typ_area = float(np.percentile(areas, 25)) if areas.size else max(min_area, 30)
+    r = max(3, int(round(math.sqrt(typ_area / math.pi))))
+    min_dist = max(3, int(round(r * 0.85)))
 
-    n, markers = cv2.connectedComponents(sure_fg)
-    markers += 1
-    markers[unknown == 255] = 0
-    markers = cv2.watershed(crop_bgr, markers)
+    dist = cv2.distanceTransform(th, cv2.DIST_L2, 5)
+    # One marker per grain: local maxima of the distance map, spaced ~1 radius.
+    coords = peak_local_max(
+        dist,
+        min_distance=min_dist,
+        threshold_abs=max(1.5, 0.40 * r),
+        labels=th.astype(bool),
+        exclude_border=False,
+    )
+    if coords.shape[0] == 0:
+        # fall back to whole-blob contours so we return something usable
+        binaries = []
+        cs, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in cs:
+            a = int(cv2.contourArea(c))
+            if min_area <= a <= max_area:
+                m = np.zeros(th.shape, np.uint8)
+                cv2.drawContours(m, [c], -1, 255, -1)
+                binaries.append(m)
+        return binaries
+
+    peaks = np.zeros(dist.shape, dtype=bool)
+    peaks[tuple(coords.T)] = True
+    markers, _ = ndi.label(peaks)
+    labels = sk_watershed(-dist, markers, mask=th.astype(bool))
 
     binaries = []
-    for label in range(2, markers.max() + 1):
-        seg = (markers == label).astype(np.uint8) * 255
+    for label in range(1, int(labels.max()) + 1):
+        seg = (labels == label).astype(np.uint8) * 255
         area = int((seg > 0).sum())
         if min_area <= area <= max_area:
             binaries.append(seg)
@@ -301,6 +347,13 @@ def segment_image(bgr, commodity):
 
     # Stable ordering: top-to-bottom, left-to-right.
     particles.sort(key=lambda p: (p["polygon"][0][1], p["polygon"][0][0]))
+
+    # Tag likely foreign matter (colour/size/shape outliers) as a hint.
+    try:
+        from .foreign import flag_foreign_suspects
+        flag_foreign_suspects(particles)
+    except Exception:
+        pass
 
     return {
         "crop_bgr": crop,
