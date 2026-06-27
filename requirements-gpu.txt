@@ -1,0 +1,6 @@
+# Extra deps to run SAM2 INSIDE this process (Mode 3, needs a local GPU).
+# Not needed for CPU deploys or the remote-worker setup.
+# GPU (CUDA 12.1):  pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
+torch==2.3.1
+torchvision==0.18.1
+sam2 @ git+https://github.com/facebookresearch/sam2.git@main
