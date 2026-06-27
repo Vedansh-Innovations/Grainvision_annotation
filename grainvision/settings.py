@@ -103,7 +103,10 @@ else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
+            # Override with SQLITE_PATH to keep the DB outside the deploy folder
+            # (e.g. /home/data/grainvision.sqlite3 on Azure App Service) so it
+            # survives redeploys.
+            "NAME": env("SQLITE_PATH", default=str(BASE_DIR / "db.sqlite3")),
         }
     }
 
@@ -151,7 +154,9 @@ STORAGES = {
 }
 
 MEDIA_URL = "media/"
-MEDIA_ROOT = BASE_DIR / "media"
+# Override with MEDIA_ROOT to keep uploads outside the deploy folder
+# (e.g. /home/data/media on Azure App Service) so they survive redeploys.
+MEDIA_ROOT = env("MEDIA_ROOT", default=str(BASE_DIR / "media"))
 
 # Serve user media through Django in production when not using object storage
 # (e.g. local filesystem or an Azure Files mount). Login-required, see urls.py.

@@ -16,11 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # ── Python deps (torch CPU first so SAM2 doesn't pull the CUDA build) ──
-COPY requirements.txt .
+COPY requirements.txt requirements-gpu.txt .
 RUN pip install --upgrade pip setuptools wheel \
     && pip install torch==2.3.1 torchvision==0.18.1 \
         --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-build-isolation -r requirements.txt
+    && pip install --no-build-isolation -r requirements.txt -r requirements-gpu.txt
 
 # ── SAM2 checkpoint (hiera-small, ~176 MB) baked into the image ──
 RUN mkdir -p ml_models \
