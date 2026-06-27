@@ -11,77 +11,80 @@
   <div class="banner banner-amber"><strong>QC rework note:</strong> {{ rework_instructions }}</div>
 {% endif %}
 
-<div class="grid canvas-grid" style="grid-template-columns:1fr 300px;gap:18px;align-items:start">
-  <div class="card" style="padding:12px">
-    <div class="toolbar">
-      <div class="tool active" data-tool="select" title="Select &amp; label (V)">▣</div>
-      <div class="tool" data-tool="pan" title="Pan (H / hold Space)">✋</div>
-      <div class="tool" data-tool="draw" title="Draw a missed particle (B)">✎</div>
-      <span style="width:1px;height:22px;background:var(--border);margin:0 4px"></span>
-      <div class="tool" data-act="zoomin" title="Zoom in (+)">＋</div>
-      <div class="tool" data-act="zoomout" title="Zoom out (−)">－</div>
-      <div class="tool" data-act="fit" title="Fit to view (0)">⤢</div>
-      <span class="spacer"></span>
-      <label class="small muted" style="display:flex;align-items:center;gap:6px">☀
-        <input type="range" id="bright" min="60" max="170" value="100" style="width:90px">
-      </label>
-      <span class="muted small" id="autosave" style="margin-left:10px">Saved</span>
-    </div>
+<style>
+  .anno-wrap{display:grid;grid-template-columns:54px 1fr 280px;gap:12px;align-items:start}
+  .toolcol{display:flex;flex-direction:column;gap:6px;background:var(--card,#fff);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:6px}
+  .tbtn{width:40px;height:40px;display:flex;align-items:center;justify-content:center;border-radius:9px;cursor:pointer;font-size:18px;border:1px solid transparent;background:transparent;user-select:none}
+  .tbtn:hover{background:rgba(0,0,0,.05)}
+  .tbtn.active{background:var(--teal,#0d9488);color:#fff}
+  .sep{height:1px;background:var(--border,#e5e7eb);margin:3px 2px}
+  .stage{position:relative;height:68vh;min-height:460px;background:#0b1020;border-radius:12px;overflow:hidden;cursor:crosshair;touch-action:none}
+  .stage svg{width:100%;height:100%;display:block}
+  .ov{position:absolute;background:rgba(17,24,39,.82);color:#fff;border-radius:8px;padding:4px 8px;font-size:12px}
+  .clsrow{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+  .clsrow:hover{background:rgba(0,0,0,.04)}
+  .clsrow.active{border-color:var(--teal,#0d9488);background:rgba(13,148,136,.08)}
+  .sw{width:14px;height:14px;border-radius:4px;flex:0 0 auto}
+  .kk{margin-left:auto;font-size:11px;color:#6b7280;border:1px solid var(--border,#e5e7eb);border-radius:5px;padding:0 5px}
+  .cnt{font-variant-numeric:tabular-nums;font-weight:600}
+  @media (max-width:820px){ .anno-wrap{grid-template-columns:46px 1fr} .sidecol{grid-column:1/-1} }
+</style>
 
-    <div class="canvas-stage" id="stage" style="height:60vh;min-height:440px;cursor:default">
-      <svg id="svg" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%"></svg>
-      <div style="position:absolute;left:12px;top:12px" class="badge">
-        {{ submission.commodity.name }} · #{{ submission.sample_number }} · <span id="pcount">{{ submission.particle_count }}</span> particles
-      </div>
-      <div id="zoomLabel" style="position:absolute;right:12px;top:12px" class="badge muted small">100%</div>
-      <div id="drawHint" style="position:absolute;left:12px;bottom:12px;display:none" class="badge">Click to add points · double-click to finish · Esc to cancel</div>
-    </div>
-
-    <div class="mt">
-      <div class="flex-between small">
-        <span class="muted">Labeling progress</span>
-        <span><strong id="doneCount">0</strong> / <span id="totalCount">0</span></span>
-      </div>
-      <div class="progress-bar mt"><div class="fill" id="progFill" style="background:var(--teal);width:0%"></div></div>
-      <div class="flex-between mt">
-        <span class="muted small" id="remainMsg">tap a particle, then press 1–5 to label</span>
-        <a class="btn btn-primary" id="toReview" href="{% url 'annotation:pre_submit' pk=submission.id %}">Review &amp; submit →</a>
-      </div>
-    </div>
+<div class="anno-wrap">
+  <div class="toolcol">
+    <div class="tbtn active" data-tool="select" title="Select / edit (V)">▣</div>
+    <div class="tbtn" data-tool="grain" title="Label grain — click a grain to tag it (G)">●</div>
+    <div class="sep"></div>
+    <div class="tbtn" data-tool="polygon" title="Polygon (P)">⬡</div>
+    <div class="tbtn" data-tool="rect" title="Rectangle (R)">▭</div>
+    <div class="tbtn" data-tool="ellipse" title="Ellipse / round (O)">◯</div>
+    <div class="tbtn" data-tool="point" title="Point — mark a tiny speck (T)">＋</div>
+    <div class="sep"></div>
+    <div class="tbtn" data-tool="pan" title="Pan (H / hold Space)">✋</div>
+    <div class="tbtn" data-act="zoomin" title="Zoom in (+)">🔍</div>
+    <div class="tbtn" data-act="fit" title="Fit (0)">⤢</div>
+    <div class="sep"></div>
+    <div class="tbtn" data-act="suspect" title="Jump to next suspected foreign matter (F)">⚠</div>
   </div>
 
   <div>
-    <div class="card">
-      <div class="card-title">Labels <span class="muted small">(shortcut keys)</span></div>
-      <div id="quickLabels"></div>
-      <div class="legend-row" style="margin-top:8px"><span><span class="dot" style="background:#F1C40F"></span>Uncertain <span class="muted">(U)</span></span><strong id="c_uncertain">0</strong></div>
-      <div class="legend-row"><span><span class="dot" style="background:#95A5A6"></span>Unlabeled</span><strong id="c_unlabeled">0</strong></div>
-      <p class="muted small" style="margin-top:8px">Selected particle: <strong id="selName">none</strong><br>Delete with <strong>Del</strong> · deselect with <strong>Esc</strong></p>
+    <div class="stage" id="stage">
+      <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="ov" style="left:10px;top:10px">{{ submission.commodity.name }} · #{{ submission.sample_number }} · <span id="pcount">0</span> items</div>
+      <div class="ov" id="zoomLabel" style="right:10px;top:10px">100%</div>
+      <div class="ov" id="hint" style="left:10px;bottom:10px;display:none"></div>
+      <div class="ov" id="saveTag" style="right:10px;bottom:10px">Saved</div>
     </div>
-    <div class="card">
-      <div class="card-title">Segmentation</div>
-      {% for w in submission.warnings %}
-        <div class="banner banner-{% if w.level == 'orange' %}orange{% else %}amber{% endif %} small">{{ w.message }}</div>
-      {% empty %}
-        <p class="muted small">No segmentation flags raised.</p>
-      {% endfor %}
-      <div class="small muted mt">Auto-detected: <span id="autoCount">0</span> · You added: <span id="userCount">0</span></div>
+    <div class="flex-between mt small">
+      <label class="muted" style="display:flex;align-items:center;gap:6px">☀
+        <input type="range" id="bright" min="60" max="180" value="100" style="width:110px">
+      </label>
+      <span class="muted" id="status">Pick a tool on the left, a class on the right.</span>
     </div>
   </div>
-</div>
 
-<!-- Label panel (bottom sheet) -->
-<div class="label-panel" id="labelPanel">
-  <div class="flex-between">
-    <strong id="panelTitle">Particle</strong>
-    <a href="#" id="panelClose" class="muted">✕</a>
-  </div>
-  <div class="small muted" id="panelMeta" style="margin:4px 0 8px"></div>
-  <div class="banner banner-error small" id="panelFlag" style="display:none">Possible merged boundary — verify before labeling.</div>
-  <div id="panelOptions"></div>
-  <div class="flex gap mt">
-    <button class="btn" id="panelUncertain" style="flex:1">Uncertain (U)</button>
-    <button class="btn btn-danger" id="panelDelete" style="flex:1">Delete (Del)</button>
+  <div class="sidecol">
+    <div class="card">
+      <div class="card-title">Class <span class="muted small">(keys)</span></div>
+      <div id="classList"></div>
+    </div>
+    <div class="card">
+      <div class="flex-between"><span class="muted small">Labeling progress</span>
+        <span><strong id="doneCount">0</strong> / <span id="totalCount">0</span></span></div>
+      <div class="progress-bar mt"><div class="fill" id="progFill" style="background:var(--teal,#0d9488);width:0%"></div></div>
+      <div class="legend-row mt"><span><span class="sw" style="background:#E74C3C;display:inline-block"></span> Suspected foreign</span><strong class="cnt" id="susCount">0</strong></div>
+      <div class="legend-row"><span>Auto-detected</span><strong class="cnt" id="autoCount">0</strong></div>
+      <div class="legend-row"><span>You added</span><strong class="cnt" id="userCount">0</strong></div>
+      <a class="btn btn-primary mt" id="toReview" style="width:100%;text-align:center" href="{% url 'annotation:pre_submit' pk=submission.id %}">Review &amp; submit →</a>
+    </div>
+    <div class="card">
+      <div class="card-title">Selected</div>
+      <div class="small" id="selInfo">Nothing selected.</div>
+      <button class="btn btn-danger mt" id="delBtn" style="width:100%;display:none">Delete (Del)</button>
+    </div>
+    <div class="card small muted">
+      <strong>Shortcuts:</strong> V select · G label · P polygon · R rect · O ellipse · T point · H pan · 1–5 class · F next suspect · Del delete · Esc cancel · +/− zoom · 0 fit
+    </div>
   </div>
 </div>
 
@@ -96,223 +99,170 @@
   const cropImg = "{{ submission.crop_image.url }}";
   const URLS = {
     label: "{% url 'annotation:label_particle' pk=submission.id %}",
-    add: "{% url 'annotation:add_particle' pk=submission.id %}",
-    del: "{% url 'annotation:delete_particle' pk=submission.id %}",
+    add:   "{% url 'annotation:add_particle' pk=submission.id %}",
+    edit:  "{% url 'annotation:edit_particle' pk=submission.id %}",
+    del:   "{% url 'annotation:delete_particle' pk=submission.id %}"
   };
-  let particles = JSON.parse(document.getElementById('particles-data').textContent);
-  const labels = JSON.parse(document.getElementById('labels-data').textContent);
-  const UNLABELED = "#95A5A6";
-
-  const svg = document.getElementById('svg');
-  const stage = document.getElementById('stage');
   const W = CROP[0], H = CROP[1];
-  let view = {x:0, y:0, scale:1};   // pan/zoom of the SVG group
-  let tool = 'select', selected = null, drawing = [], lastUserAdded = [];
-  let isPanning = false, panStart = null, spaceDown = false;
+  let particles = JSON.parse(document.getElementById('particles-data').textContent);
+  const labels  = JSON.parse(document.getElementById('labels-data').textContent);
+  const colorOf = {}; labels.forEach(l=>colorOf[l.value]=l.color); colorOf['unlabeled']='#95A5A6';
 
-  const NS = 'http://www.w3.org/2000/svg';
-  function el(name, attrs){ const e=document.createElementNS(NS,name); for(const k in attrs) e.setAttribute(k, attrs[k]); return e; }
-  function post(url, body){ return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':window.csrftoken},body:JSON.stringify(body)}).then(r=>r.json()); }
-  function ptsStr(poly){ return poly.map(p=>p.join(',')).join(' '); }
-  function hexA(hex,a){ const n=parseInt(hex.slice(1),16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
+  const NS='http://www.w3.org/2000/svg';
+  const svg=document.getElementById('svg'), stage=document.getElementById('stage');
+  let view={x:0,y:0,scale:1};
+  let tool='select', activeLabel=(labels[0]&&labels[0].value)||'good';
+  let selected=null, draft=null;
+  let panning=false, panStart=null, spaceDown=false, dragVert=null;
 
-  function fit(){
-    const r = stage.getBoundingClientRect();
-    const s = Math.min(r.width/W, r.height/H);
-    view.scale = s; view.x = (r.width - W*s)/2; view.y = (r.height - H*s)/2;
-    render();
-  }
+  function el(n,a){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;}
+  function post(u,b){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':window.csrftoken},body:JSON.stringify(b)}).then(r=>r.json());}
+  function hexA(hex,a){const n=parseInt(hex.slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';}
+  function flash(t){const s=document.getElementById('saveTag');s.textContent=t;if(t==='Saving…')return;setTimeout(()=>s.textContent='Saved',600);}
+  function setStatus(t){document.getElementById('status').textContent=t;}
+  function stageXY(ev){const r=stage.getBoundingClientRect();return [ev.clientX-r.left, ev.clientY-r.top];}
+  function toImg(ev){const a=stageXY(ev);return [(a[0]-view.x)/view.scale,(a[1]-view.y)/view.scale];}
+  function fit(){const r=stage.getBoundingClientRect();const s=Math.min(r.width/W,r.height/H)*0.96;view.scale=s;view.x=(r.width-W*s)/2;view.y=(r.height-H*s)/2;render();}
+  function zoomAt(sx,sy,f){const ix=(sx-view.x)/view.scale,iy=(sy-view.y)/view.scale;view.scale=Math.max(0.05,Math.min(40,view.scale*f));view.x=sx-ix*view.scale;view.y=sy-iy*view.scale;render();}
+  function pById(id){return particles.find(p=>p.id===id);}
+  function isSuspect(p){return p.features&&p.features.foreign_suspect&&p.label==='unlabeled';}
+  function norm(a,b){return [Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.max(a[0],b[0]),Math.max(a[1],b[1])];}
+  function centroid(poly){let x=0,y=0;poly.forEach(p=>{x+=p[0];y+=p[1];});return [x/poly.length,y/poly.length];}
+  function labelName(v){const l=labels.find(x=>x.value===v);return l?l.label:v;}
 
   function render(){
+    const r=stage.getBoundingClientRect();
+    svg.setAttribute('viewBox','0 0 '+r.width+' '+r.height);
     svg.innerHTML='';
-    const r = stage.getBoundingClientRect();
-    svg.setAttribute('viewBox', `0 0 ${r.width} ${r.height}`);
-    const g = el('g', {transform:`translate(${view.x},${view.y}) scale(${view.scale})`});
-
-    const img = el('image', {x:0,y:0,width:W,height:H,preserveAspectRatio:'none'});
-    // brightness must be a CSS filter (style), NOT the SVG `filter` attribute —
-    // the SVG attribute only accepts url(#id) and an invalid value hides the image.
-    img.style.filter = `brightness(${document.getElementById('bright').value}%)`;
-    img.setAttribute('href', cropImg);
-    img.setAttributeNS('http://www.w3.org/1999/xlink','href', cropImg);
+    const g=el('g',{transform:'translate('+view.x+','+view.y+') scale('+view.scale+')'});
+    const img=el('image',{x:0,y:0,width:W,height:H,preserveAspectRatio:'none'});
+    img.setAttributeNS('http://www.w3.org/1999/xlink','href',cropImg);
+    img.setAttribute('href',cropImg);
+    img.style.filter='brightness('+document.getElementById('bright').value+'%)';
     g.appendChild(img);
 
     particles.forEach(p=>{
-      const isUn = p.label==='unlabeled' && !p.uncertain;
-      const col = p.uncertain ? '#F1C40F' : (isUn ? UNLABELED : p.color);
-      const poly = el('polygon', {
-        points: ptsStr(p.polygon),
-        fill: col, 'fill-opacity': isUn?0.16:0.40,
-        stroke: selected===p.id ? '#1B2A4A' : (p.flagged_by_seg ? '#E67E22' : col),
-        'stroke-width': (selected===p.id?3:(p.flagged_by_seg?2.4:1.5))/view.scale,
-        'vector-effect':'non-scaling-stroke',
-      });
-      if (isUn) poly.setAttribute('stroke-dasharray','6 4');
-      if (selected===p.id) poly.setAttribute('stroke-dasharray','5 3');
-      poly.style.cursor = tool==='select' ? 'pointer':'inherit';
-      poly.addEventListener('mousedown', e=>{ if(tool==='select'){ e.stopPropagation(); selectParticle(p); } });
+      const col=colorOf[p.label]||'#95A5A6', sel=p.id===selected, sus=isSuspect(p);
+      const poly=el('polygon',{points:p.polygon.map(q=>q.join(',')).join(' '),
+        fill:hexA(col,p.label==='unlabeled'?0.06:0.28),
+        stroke:sus?'#E74C3C':col,'stroke-width':(sel?2.4:1.1),
+        'stroke-dasharray':sus?'4,3':'','vector-effect':'non-scaling-stroke','data-id':p.id,'class':'poly'});
       g.appendChild(poly);
+      if(sus){const c=centroid(p.polygon);const t=el('text',{x:c[0],y:c[1],fill:'#E74C3C','font-size':14/view.scale,'text-anchor':'middle','dominant-baseline':'central','pointer-events':'none'});t.textContent='⚠';g.appendChild(t);}
     });
 
-    if (drawing.length){
-      g.appendChild(el('polyline',{points:ptsStr(drawing),fill:'none',stroke:'#1ABC9C','stroke-width':2/view.scale,'vector-effect':'non-scaling-stroke'}));
-      drawing.forEach(pt=> g.appendChild(el('circle',{cx:pt[0],cy:pt[1],r:4/view.scale,fill:'#1ABC9C'})));
+    if(selected!=null&&tool==='select'){const p=pById(selected);if(p)p.polygon.forEach((q,i)=>{g.appendChild(el('circle',{cx:q[0],cy:q[1],r:4/view.scale,fill:'#fff',stroke:colorOf[p.label]||'#0d9488','stroke-width':1.5/view.scale,'class':'vh','data-idx':i}));});}
+
+    if(draft){
+      if(draft.type==='polygon'){
+        if(draft.pts.length){const pts=draft.pts.concat([draft.cur||draft.pts[draft.pts.length-1]]);g.appendChild(el('polyline',{points:pts.map(q=>q.join(',')).join(' '),fill:'none',stroke:'#22d3ee','stroke-width':1.5,'vector-effect':'non-scaling-stroke'}));}
+        draft.pts.forEach(q=>g.appendChild(el('circle',{cx:q[0],cy:q[1],r:3/view.scale,fill:'#22d3ee'})));
+      } else if(draft.type==='rect'&&draft.b){const b=norm(draft.a,draft.b);g.appendChild(el('rect',{x:b[0],y:b[1],width:b[2]-b[0],height:b[3]-b[1],fill:hexA(colorOf[activeLabel],0.2),stroke:'#22d3ee','stroke-width':1.5,'vector-effect':'non-scaling-stroke'}));}
+      else if(draft.type==='ellipse'&&draft.b){const b=norm(draft.a,draft.b);g.appendChild(el('ellipse',{cx:(b[0]+b[2])/2,cy:(b[1]+b[3])/2,rx:Math.abs(b[2]-b[0])/2,ry:Math.abs(b[3]-b[1])/2,fill:hexA(colorOf[activeLabel],0.2),stroke:'#22d3ee','stroke-width':1.5,'vector-effect':'non-scaling-stroke'}));}
     }
     svg.appendChild(g);
-    document.getElementById('zoomLabel').textContent = Math.round(view.scale/baseScale()*100)+'%';
+    document.getElementById('zoomLabel').textContent=Math.round(view.scale*100)+'%';
     updateCounts();
   }
-  function baseScale(){ const r=stage.getBoundingClientRect(); return Math.min(r.width/W, r.height/H); }
-
-  // ── coordinate helpers ──
-  function toImg(clientX, clientY){
-    const r = stage.getBoundingClientRect();
-    return [ (clientX - r.left - view.x)/view.scale, (clientY - r.top - view.y)/view.scale ];
-  }
-
-  // ── selection + labeling ──
-  function selectParticle(p){ selected = p.id; openPanel(p); render(); }
-  function deselect(){ selected=null; closePanel(); render(); }
-
-  function quickLabelsPanel(){
-    const box = document.getElementById('quickLabels'); box.innerHTML='';
-    labels.forEach((l,i)=>{
-      const row = document.createElement('div'); row.className='legend-row';
-      row.innerHTML = `<span><span class="dot" style="background:${l.color}"></span>${l.label} <span class="muted">(${i+1})</span></span><strong id="c_${l.value}">0</strong>`;
-      box.appendChild(row);
-    });
-  }
-
-  function openPanel(p){
-    document.getElementById('panelTitle').textContent='Particle #'+p.particle_id;
-    document.getElementById('selName').textContent='#'+p.particle_id;
-    const f=p.features||{};
-    document.getElementById('panelMeta').textContent =
-      `Area ${Math.round(f.area||0)} px² · Solidity ${(f.solidity??0).toFixed?Number(f.solidity).toFixed(2):f.solidity}`;
-    document.getElementById('panelFlag').style.display = p.flagged_by_seg?'block':'none';
-    const opts=document.getElementById('panelOptions'); opts.innerHTML='';
-    labels.forEach((l,i)=>{
-      const d=document.createElement('div'); d.className='label-opt';
-      d.style.background=hexA(l.color,0.14); d.style.borderColor=hexA(l.color,0.42);
-      d.innerHTML=`<span class="dot" style="background:${l.color}"></span>${l.label} <span class="muted" style="margin-left:auto">${i+1}</span>`;
-      d.onclick=()=>applyLabel(p,l.value);
-      opts.appendChild(d);
-    });
-    document.getElementById('panelUncertain').onclick=()=>applyLabel(p,'uncertain');
-    document.getElementById('panelDelete').onclick=()=>removeParticle(p);
-    document.getElementById('labelPanel').classList.add('open');
-  }
-  function closePanel(){ document.getElementById('labelPanel').classList.remove('open'); }
-  document.getElementById('panelClose').onclick=e=>{e.preventDefault(); deselect();};
-
-  function applyLabel(p,label){
-    post(URLS.label,{particle_pk:p.id,label}).then(res=>{
-      if(!res.ok) return;
-      if(label==='uncertain'){ p.uncertain=true; }
-      else { p.label=res.label; p.uncertain=false; p.color=res.color; }
-      flash(); render();
-      // auto-advance to next unlabeled
-      const next = particles.find(x=>x.label==='unlabeled' && !x.uncertain);
-      if(next){ selectParticle(next); } else { deselect(); }
-    });
-  }
-  function removeParticle(p){
-    post(URLS.del,{particle_pk:p.id}).then(()=>{ particles=particles.filter(x=>x.id!==p.id); deselect(); });
-  }
-  function flash(){ const a=document.getElementById('autosave'); a.textContent='Saved ✓'; }
 
   function updateCounts(){
-    const counts={uncertain:0,unlabeled:0}; labels.forEach(l=>counts[l.value]=0);
-    particles.forEach(p=>{ if(p.uncertain) counts.uncertain++; else if(p.label==='unlabeled') counts.unlabeled++; else counts[p.label]=(counts[p.label]||0)+1; });
-    labels.forEach(l=>{ const e=document.getElementById('c_'+l.value); if(e) e.textContent=counts[l.value]||0; });
-    document.getElementById('c_uncertain').textContent=counts.uncertain;
-    document.getElementById('c_unlabeled').textContent=counts.unlabeled;
-    document.getElementById('autoCount').textContent=particles.filter(p=>p.origin==='auto').length;
-    document.getElementById('userCount').textContent=particles.filter(p=>p.origin==='user').length;
-    document.getElementById('pcount').textContent=particles.length;
-
-    const total=particles.length, done=particles.filter(p=>p.label!=='unlabeled'||p.uncertain).length;
-    document.getElementById('doneCount').textContent=done;
+    const total=particles.length,done=particles.filter(p=>p.label!=='unlabeled').length;
+    document.getElementById('pcount').textContent=total;
     document.getElementById('totalCount').textContent=total;
-    document.getElementById('progFill').style.width = total?(done/total*100)+'%':'0%';
-    const btn=document.getElementById('toReview'), msg=document.getElementById('remainMsg'), remain=total-done;
-    if(remain>0){ msg.textContent=remain+' particle(s) left — select one and press 1–5'; btn.style.pointerEvents='none'; btn.style.opacity=.5; }
-    else { msg.textContent='All particles labeled — ready for review'; btn.style.pointerEvents=''; btn.style.opacity=1; }
+    document.getElementById('doneCount').textContent=done;
+    document.getElementById('susCount').textContent=particles.filter(isSuspect).length;
+    const auto=particles.filter(p=>p.origin==='auto').length;
+    document.getElementById('autoCount').textContent=auto;
+    document.getElementById('userCount').textContent=total-auto;
+    document.getElementById('progFill').style.width=(total?Math.round(done/total*100):0)+'%';
+    labels.forEach(l=>{const c=document.getElementById('cc_'+l.value);if(c)c.textContent=particles.filter(p=>p.label===l.value).length;});
   }
 
-  // ── tools ──
-  document.querySelectorAll('.tool[data-tool]').forEach(t=>{
-    t.onclick=()=>{ document.querySelectorAll('.tool[data-tool]').forEach(x=>x.classList.remove('active'));
-      t.classList.add('active'); tool=t.dataset.tool; drawing=[];
-      document.getElementById('drawHint').style.display = tool==='draw'?'block':'none';
-      stage.style.cursor = tool==='pan'?'grab':(tool==='draw'?'crosshair':'default'); render(); };
-  });
-  document.querySelectorAll('.tool[data-act]').forEach(t=>{
-    t.onclick=()=>{ const a=t.dataset.act;
-      if(a==='zoomin') zoomBy(1.25);
-      else if(a==='zoomout') zoomBy(0.8);
-      else if(a==='fit') fit(); };
-  });
-  function zoomBy(factor, cx, cy){
-    const r=stage.getBoundingClientRect();
-    cx = cx==null ? r.width/2 : cx; cy = cy==null ? r.height/2 : cy;
-    const ix=(cx-view.x)/view.scale, iy=(cy-view.y)/view.scale;
-    view.scale*=factor;
-    view.x = cx - ix*view.scale; view.y = cy - iy*view.scale;
-    render();
-  }
+  function buildClasses(){const box=document.getElementById('classList');box.innerHTML='';
+    labels.forEach((l,i)=>{const row=document.createElement('div');row.className='clsrow'+(l.value===activeLabel?' active':'');row.dataset.val=l.value;
+      row.innerHTML='<span class="sw" style="background:'+l.color+'"></span><span>'+l.label+'</span><strong class="cnt" id="cc_'+l.value+'" style="margin-left:auto">0</strong><span class="kk">'+(i+1)+'</span>';
+      row.onclick=()=>setActive(l.value);box.appendChild(row);});}
+  function setActive(v){activeLabel=v;document.querySelectorAll('.clsrow').forEach(r=>r.classList.toggle('active',r.dataset.val===v));if(selected!=null)labelParticle(selected,v);}
 
-  // wheel zoom
-  stage.addEventListener('wheel', e=>{ e.preventDefault();
-    const r=stage.getBoundingClientRect();
-    zoomBy(e.deltaY<0?1.12:0.89, e.clientX-r.left, e.clientY-r.top);
-  }, {passive:false});
+  function selectTool(t){tool=t;document.querySelectorAll('.tbtn[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===t));
+    stage.style.cursor=t==='pan'?'grab':(t==='select'||t==='grain'?'pointer':'crosshair');
+    const hints={polygon:'Click to add points · double-click / Enter to finish · Esc cancels',rect:'Drag to draw a box',ellipse:'Drag to draw an ellipse',point:'Click to drop a point on a speck',grain:'Click any grain to tag it as “'+labelName(activeLabel)+'”',select:'Click a shape to select · drag its dots to reshape'};
+    const h=document.getElementById('hint');if(hints[t]){h.style.display='';h.textContent=hints[t];}else h.style.display='none';draft=null;render();}
 
-  // pan + draw via mouse
-  stage.addEventListener('mousedown', e=>{
-    if(tool==='pan' || spaceDown){ isPanning=true; panStart={x:e.clientX-view.x, y:e.clientY-view.y}; stage.style.cursor='grabbing'; return; }
-    if(tool==='draw'){ const [x,y]=toImg(e.clientX,e.clientY); drawing.push([Math.round(x),Math.round(y)]); render(); }
-  });
-  window.addEventListener('mousemove', e=>{
-    if(isPanning){ view.x=e.clientX-panStart.x; view.y=e.clientY-panStart.y; render(); }
-  });
-  window.addEventListener('mouseup', ()=>{ if(isPanning){ isPanning=false; stage.style.cursor= tool==='pan'?'grab':'default'; } });
-  stage.addEventListener('dblclick', e=>{
-    if(tool==='draw' && drawing.length>=3){
-      post(URLS.add,{polygon:drawing}).then(res=>{
-        if(res.ok){ particles.push({id:res.id,particle_id:res.particle_id,label:'unlabeled',color:UNLABELED,polygon:drawing.slice(),origin:'user',uncertain:false,flagged_by_seg:false,features:{}}); lastUserAdded.push(res.id); }
-        drawing=[]; render();
-      });
-    }
-  });
-  // click empty space deselects (select mode)
-  svg.addEventListener('mousedown', e=>{ if(tool==='select' && e.target===svg){ deselect(); } });
+  function labelParticle(id,label){const p=pById(id);if(!p)return;p.label=label;p.color=colorOf[label];render();flash('Saving…');post(URLS.label,{particle_pk:id,label:label}).then(()=>flash('Saved'));}
+  function deleteParticle(id){flash('Saving…');post(URLS.del,{particle_pk:id}).then(()=>{particles=particles.filter(p=>p.id!==id);if(selected===id)selectParticle(null);render();flash('Saved');});}
+  function addShape(poly){if(poly.length<3)return;flash('Saving…');post(URLS.add,{polygon:poly.map(p=>[Math.round(p[0]),Math.round(p[1])]),label:activeLabel}).then(res=>{if(res&&res.ok){particles.push({id:res.id,particle_id:res.particle_id,label:res.label||activeLabel,color:colorOf[res.label||activeLabel],polygon:poly,origin:'user',uncertain:false,flagged_by_seg:false,features:{}});render();flash('Saved');}});}
+  function saveEdit(p){flash('Saving…');post(URLS.edit,{particle_pk:p.id,polygon:p.polygon.map(q=>[Math.round(q[0]),Math.round(q[1])])}).then(()=>flash('Saved'));}
 
-  // ── keyboard ──
-  window.addEventListener('keydown', e=>{
-    if(e.target.tagName==='INPUT') return;
-    if(e.code==='Space'){ spaceDown=true; stage.style.cursor='grab'; }
-    const sel = selected!=null ? particles.find(p=>p.id===selected) : null;
-    if(e.key>='1' && e.key<='5'){ const l=labels[parseInt(e.key)-1]; if(l&&sel) applyLabel(sel,l.value); }
-    else if(e.key==='u'||e.key==='U'){ if(sel) applyLabel(sel,'uncertain'); }
-    else if(e.key==='Delete'||e.key==='Backspace'){ if(sel){ e.preventDefault(); removeParticle(sel); } }
-    else if(e.key==='Escape'){ drawing=[]; deselect(); }
-    else if(e.key==='+'||e.key==='='){ zoomBy(1.25); }
-    else if(e.key==='-'){ zoomBy(0.8); }
-    else if(e.key==='0'){ fit(); }
-    else if(e.key==='v'||e.key==='V'){ document.querySelector('.tool[data-tool=select]').click(); }
-    else if(e.key==='h'||e.key==='H'){ document.querySelector('.tool[data-tool=pan]').click(); }
-    else if(e.key==='b'||e.key==='B'){ document.querySelector('.tool[data-tool=draw]').click(); }
+  function selectParticle(id){selected=id;const info=document.getElementById('selInfo'),del=document.getElementById('delBtn');
+    if(id==null){info.textContent='Nothing selected.';del.style.display='none';render();return;}
+    const p=pById(id);
+    info.innerHTML='#'+p.particle_id+' · <strong style="color:'+colorOf[p.label]+'">'+labelName(p.label)+'</strong><br><span class="muted">'+(p.origin==='auto'?'auto-detected':'you added')+(p.features&&p.features.foreign_suspect?' · ⚠ suspected foreign':'')+'</span><br><span class="muted small">Press 1–'+labels.length+' to set its class.</span>';
+    del.style.display='';render();}
+
+  function nextSuspect(){const list=particles.filter(isSuspect);if(!list.length){setStatus('No suspected foreign matter left to review.');return;}
+    const p=list[0],c=centroid(p.polygon),r=stage.getBoundingClientRect();
+    view.scale=Math.min(8,Math.max(view.scale,2));view.x=r.width/2-c[0]*view.scale;view.y=r.height/2-c[1]*view.scale;
+    selectTool('select');selectParticle(p.id);setStatus('Suspected foreign matter — set its class.');}
+
+  function hitParticle(ev){const t=ev.target;if(t&&t.classList&&t.classList.contains('poly'))return parseInt(t.getAttribute('data-id'));return null;}
+
+  stage.addEventListener('pointerdown',ev=>{stage.setPointerCapture(ev.pointerId);
+    if(tool==='pan'||spaceDown||ev.button===1){panning=true;panStart=[ev.clientX,ev.clientY,view.x,view.y];stage.style.cursor='grabbing';return;}
+    const ij=toImg(ev),ix=ij[0],iy=ij[1];
+    if(tool==='select'){if(ev.target.classList&&ev.target.classList.contains('vh')){dragVert={pid:selected,idx:parseInt(ev.target.getAttribute('data-idx'))};return;}selectParticle(hitParticle(ev));return;}
+    if(tool==='grain'){const id=hitParticle(ev);if(id!=null)labelParticle(id,activeLabel);return;}
+    if(tool==='point'){const s=Math.max(3,6/view.scale);addShape([[ix-s,iy-s],[ix+s,iy-s],[ix+s,iy+s],[ix-s,iy+s]]);return;}
+    if(tool==='rect'||tool==='ellipse'){draft={type:tool,a:[ix,iy],b:[ix,iy]};return;}
+    if(tool==='polygon'){if(!draft)draft={type:'polygon',pts:[]};draft.pts.push([ix,iy]);draft.cur=[ix,iy];render();return;}
   });
-  window.addEventListener('keyup', e=>{ if(e.code==='Space'){ spaceDown=false; stage.style.cursor= tool==='pan'?'grab':'default'; } });
+  stage.addEventListener('pointermove',ev=>{
+    if(panning){view.x=panStart[2]+(ev.clientX-panStart[0]);view.y=panStart[3]+(ev.clientY-panStart[1]);render();return;}
+    const ij=toImg(ev),ix=ij[0],iy=ij[1];
+    if(dragVert){const p=pById(dragVert.pid);if(p){p.polygon[dragVert.idx]=[ix,iy];render();}return;}
+    if(draft&&(draft.type==='rect'||draft.type==='ellipse')){draft.b=[ix,iy];render();return;}
+    if(draft&&draft.type==='polygon'){draft.cur=[ix,iy];render();return;}
+  });
+  stage.addEventListener('pointerup',ev=>{
+    if(panning){panning=false;stage.style.cursor=(tool==='pan')?'grab':stage.style.cursor;return;}
+    if(dragVert){const p=pById(dragVert.pid);if(p)saveEdit(p);dragVert=null;return;}
+    if(draft&&(draft.type==='rect'||draft.type==='ellipse')){const b=norm(draft.a,draft.b);
+      if(Math.abs(b[2]-b[0])>3&&Math.abs(b[3]-b[1])>3){let poly;
+        if(draft.type==='rect')poly=[[b[0],b[1]],[b[2],b[1]],[b[2],b[3]],[b[0],b[3]]];
+        else{poly=[];const cx=(b[0]+b[2])/2,cy=(b[1]+b[3])/2,rx=(b[2]-b[0])/2,ry=(b[3]-b[1])/2;for(let i=0;i<28;i++){const a=i/28*2*Math.PI;poly.push([cx+rx*Math.cos(a),cy+ry*Math.sin(a)]);}}
+        addShape(poly);}
+      draft=null;render();}
+  });
+  stage.addEventListener('dblclick',()=>{if(draft&&draft.type==='polygon')finishPolygon();});
+  stage.addEventListener('wheel',ev=>{ev.preventDefault();const a=stageXY(ev);zoomAt(a[0],a[1],ev.deltaY<0?1.15:0.87);},{passive:false});
+  function finishPolygon(){if(draft&&draft.type==='polygon'&&draft.pts.length>=3)addShape(draft.pts.slice());draft=null;render();}
 
-  document.getElementById('bright').addEventListener('input', render);
-  window.addEventListener('resize', fit);
+  document.querySelectorAll('.tbtn[data-tool]').forEach(b=>b.onclick=()=>selectTool(b.dataset.tool));
+  document.querySelectorAll('.tbtn[data-act]').forEach(b=>b.onclick=()=>{const a=b.dataset.act,r=stage.getBoundingClientRect();if(a==='zoomin')zoomAt(r.width/2,r.height/2,1.2);if(a==='fit')fit();if(a==='suspect')nextSuspect();});
+  document.getElementById('delBtn').onclick=()=>{if(selected!=null)deleteParticle(selected);};
+  document.getElementById('bright').oninput=render;
 
-  quickLabelsPanel();
-  // ensure background image is loaded before first fit for correct sizing
-  const pre = new Image(); pre.onload = fit; pre.onerror = fit; pre.src = cropImg;
-  fit();
+  document.addEventListener('keydown',e=>{
+    if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
+    if(e.code==='Space'){spaceDown=true;stage.style.cursor='grab';return;}
+    const k=e.key.toLowerCase();
+    const map={v:'select',g:'grain',p:'polygon',r:'rect',o:'ellipse',t:'point',h:'pan'};
+    if(map[k]){selectTool(map[k]);return;}
+    if(k>='1'&&k<=String(labels.length)){const l=labels[parseInt(k)-1];if(l)setActive(l.value);return;}
+    if(k==='f'){nextSuspect();return;}
+    if(e.key==='Enter'&&draft){finishPolygon();return;}
+    if(e.key==='Escape'){draft=null;selectParticle(null);render();return;}
+    if(e.key==='Delete'||e.key==='Backspace'){if(selected!=null)deleteParticle(selected);return;}
+    if(e.key==='+'||e.key==='='){const r=stage.getBoundingClientRect();zoomAt(r.width/2,r.height/2,1.2);}
+    if(e.key==='-'){const r=stage.getBoundingClientRect();zoomAt(r.width/2,r.height/2,0.83);}
+    if(e.key==='0')fit();
+  });
+  document.addEventListener('keyup',e=>{if(e.code==='Space'){spaceDown=false;stage.style.cursor=(tool==='pan')?'grab':stage.style.cursor;}});
+  window.addEventListener('resize',render);
+
+  buildClasses();selectTool('select');
+  const im=new Image();im.onload=fit;im.onerror=fit;im.src=cropImg;
+  setTimeout(fit,60);
 })();
 </script>
 {% endblock %}
