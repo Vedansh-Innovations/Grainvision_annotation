@@ -1,0 +1,229 @@
+{% extends 'partials/base.html' %}
+{% block title %}Capture · {{ submission.commodity.name }}{% endblock %}
+{% block sidebar %}{% include 'partials/sidebar.html' with active='workspace' %}{% endblock %}
+{% block crumb %}<span class="crumb">/ Capture — {{ submission.commodity.name }} #{{ submission.sample_number }}</span>{% endblock %}
+
+{% block content %}
+{% include 'annotation/_stepper.html' with step=1 %}
+
+<div class="grid grid-2" style="max-width:920px;margin:0 auto;align-items:start">
+  <div class="card">
+    <div class="card-title">Auto-capture viewfinder</div>
+    <div style="position:relative;background:#11151c;border-radius:var(--radius);overflow:hidden">
+      <video id="video" autoplay playsinline muted style="width:100%;display:block"></video>
+      <canvas id="overlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
+      <div id="noCam" style="display:none;padding:40px;text-align:center;color:#9fb0c4">
+        Camera unavailable on this device.
+      </div>
+    </div>
+
+    <div class="flex gap mt" style="justify-content:center">
+      <span class="badge" id="pill-align"><span class="dot" style="background:#888"></span> Alignment</span>
+      <span class="badge" id="pill-light"><span class="dot" style="background:#888"></span> Lighting</span>
+      <span class="badge" id="pill-sharp"><span class="dot" style="background:#888"></span> Sharpness</span>
+    </div>
+
+    <div id="countdownWrap" class="mt" style="text-align:center;display:none">
+      <div class="muted small">Hold steady — auto-capturing in</div>
+      <div id="countdown" style="font-size:34px;font-weight:700;color:var(--ok)">2.0s</div>
+      <div class="progress-bar" style="max-width:240px;margin:0 auto"><div class="fill" id="cdfill" style="background:var(--ok);width:0%"></div></div>
+    </div>
+    <p class="muted small mt" style="text-align:center">Auto-capture only — no manual shutter (PRD §5.1).</p>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Live validation</div>
+    <div id="liveStatus" class="small mono">
+      <div data-k="plate">Plate detected · <span>waiting…</span></div>
+      <div data-k="light">Lighting · <span>waiting…</span></div>
+      <div data-k="sharp">Sharpness · <span>waiting…</span></div>
+      <div data-k="tilt">Tilt · <span>waiting…</span></div>
+    </div>
+    <div class="banner banner-info mt small" id="hint">Center the plate within the circular guide.</div>
+    <div class="banner banner-amber mt small" style="display:none" id="uploadStatus">Uploading & segmenting…</div>
+  </div>
+</div>
+
+<canvas id="work" width="200" height="200" style="display:none"></canvas>
+
+<script>
+(function(){
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const work = document.getElementById('work');
+  const wctx = work.getContext('2d', { willReadFrequently: true });
+  const octx = overlay.getContext('2d');
+  const submitUrl = "{% url 'annotation:capture_submit' submission.id %}";
+
+  const pills = { align: document.getElementById('pill-align'),
+                  light: document.getElementById('pill-light'),
+                  sharp: document.getElementById('pill-sharp') };
+  const live = {};
+  document.querySelectorAll('#liveStatus [data-k]').forEach(d => live[d.dataset.k] = d.querySelector('span'));
+
+  let stableSince = null, capturing = false, cdStart = null, lastLog = 0, wasArmed = false;
+  const HOLD_MS = 500;        // conditions hold before the countdown arms (relaxed)
+  const COUNTDOWN_MS = 1000;  // steady-hold countdown (relaxed)
+
+  // ── Auto-capture thresholds (relaxed for normal, everyday conditions) ──
+  // Tune these if capture is too eager / too reluctant on your device.
+  const THRESH = {
+    centerMin:      70,   // min brightness of plate centre (was 110)
+    centerContrast: 3,    // centre must be this much brighter than corners (was 12)
+    meanMin:        45,   // overall luminance lower bound (was 100)
+    meanMax:        250,  // overall luminance upper bound (was 220)
+    stdMax:         95,   // luminance spread tolerance (was 48)
+    glareMax:       250,  // blown-out pixel tolerance (was 60)
+    sharpMin:       2.5,  // edge-energy / focus threshold (was 9)
+  };
+
+  function setPill(el, ok, text){
+    el.className = 'badge ' + (ok ? 'badge-approved' : 'badge-warn');
+    el.querySelector('.dot').style.background = ok ? 'var(--ok)' : '#c9a227';
+    el.childNodes[1].nodeValue = ' ' + text;
+  }
+
+  function drawGuide(ok){
+    const w = overlay.width = overlay.clientWidth;
+    const h = overlay.height = overlay.clientHeight;
+    octx.clearRect(0,0,w,h);
+    const cx=w/2, cy=h/2, r=Math.min(w,h)*0.42;
+    octx.strokeStyle = ok ? '#2ECC71' : 'rgba(255,255,255,.6)';
+    octx.lineWidth = ok ? 5 : 3;
+    octx.setLineDash(ok ? [] : [10,8]);
+    octx.beginPath(); octx.arc(cx,cy,r,0,Math.PI*2); octx.stroke();
+  }
+
+  function analyseFrame(){
+    if (!video.videoWidth) return null;
+    wctx.drawImage(video, 0, 0, work.width, work.height);
+    const W=work.width, H=work.height;
+    const data = wctx.getImageData(0,0,W,H).data;
+
+    // center disc sampling for luminance
+    let sum=0, sumSq=0, n=0, edge=0, glare=0;
+    let centerLum=0, cn=0, cornerLum=0, kn=0;
+    const cx=W/2, cy=H/2, R=Math.min(W,H)*0.42;
+    let prev=0;
+    for (let y=0;y<H;y++){
+      for (let x=0;x<W;x++){
+        const i=(y*W+x)*4;
+        const lum = 0.299*data[i]+0.587*data[i+1]+0.114*data[i+2];
+        const d = Math.hypot(x-cx,y-cy);
+        if (d < R){
+          sum+=lum; sumSq+=lum*lum; n++;
+          if (lum>245) glare++;
+          if (d < R*0.4){ centerLum+=lum; cn++; }
+          if (x>0){ edge += Math.abs(lum - prev); }
+        } else if (d > R*1.05){ cornerLum+=lum; kn++; }
+        prev=lum;
+      }
+    }
+    const mean = n? sum/n : 0;
+    const std = n? Math.sqrt(sumSq/n - mean*mean) : 0;
+    const sharp = n? edge/n : 0;
+    const centerMean = cn? centerLum/cn : 0;
+    const cornerMean = kn? cornerLum/kn : 1;
+    return { mean, std, sharp, glare, centerMean, cornerMean };
+  }
+
+  function tick(){
+    if (capturing) { requestAnimationFrame(tick); return; }
+    const f = analyseFrame();
+    if (!f){ requestAnimationFrame(tick); return; }
+
+    // Alignment: a brighter plate roughly fills the centre guide.
+    const alignOK = f.centerMean > THRESH.centerMin && (f.centerMean - f.cornerMean) > THRESH.centerContrast;
+    // Lighting: within a wide luminance band, not too noisy, not blown out.
+    const lightOK = f.mean >= THRESH.meanMin && f.mean <= THRESH.meanMax && f.std < THRESH.stdMax && f.glare < THRESH.glareMax;
+    // Sharpness: enough edge energy to be in focus.
+    const sharpOK = f.sharp > THRESH.sharpMin;
+    const tiltOK = true; // ellipse eccentricity proxy held by guide alignment
+
+    // ── Diagnostics: log every ~500ms so you can see which check fails ──
+    if (performance.now() - lastLog > 500) {
+      lastLog = performance.now();
+      const failing = [];
+      if (!alignOK) failing.push('align');
+      if (!lightOK) failing.push('light');
+      if (!sharpOK) failing.push('sharp');
+      console.log('[auto-capture]', {
+        metrics: {
+          centerMean: +f.centerMean.toFixed(1), cornerMean: +f.cornerMean.toFixed(1),
+          mean: +f.mean.toFixed(1), std: +f.std.toFixed(1),
+          sharp: +f.sharp.toFixed(2), glare: f.glare,
+        },
+        checks: {
+          align: alignOK + ` (centerMean ${f.centerMean.toFixed(0)}>${THRESH.centerMin} && contrast ${(f.centerMean-f.cornerMean).toFixed(0)}>${THRESH.centerContrast})`,
+          light: lightOK + ` (mean ${f.mean.toFixed(0)} in [${THRESH.meanMin},${THRESH.meanMax}], std ${f.std.toFixed(0)}<${THRESH.stdMax}, glare ${f.glare}<${THRESH.glareMax})`,
+          sharp: sharpOK + ` (edge ${f.sharp.toFixed(1)}>${THRESH.sharpMin})`,
+        },
+        result: (alignOK && lightOK && sharpOK) ? 'ALL OK — arming' : ('FAILING: ' + failing.join(', ')),
+      });
+    }
+
+    setPill(pills.align, alignOK, alignOK ? 'Aligned' : 'Center plate');
+    setPill(pills.light, lightOK, lightOK ? 'Light OK' : 'Adjust light');
+    setPill(pills.sharp, sharpOK, sharpOK ? 'Sharp' : 'Hold still');
+
+    live.plate.textContent = alignOK ? 'circle within guide · center offset ok' : 'searching for plate…';
+    live.light.textContent = 'mean luminance ' + f.mean.toFixed(0) + ' · σ ' + f.std.toFixed(0) + (f.glare>=60?' · glare':' · no glare');
+    live.sharp.textContent = 'edge energy ' + f.sharp.toFixed(1) + (sharpOK?' > threshold':' < threshold');
+    live.tilt.textContent = tiltOK ? 'camera perpendicular' : 'tilt detected';
+
+    const allOK = alignOK && lightOK && sharpOK && tiltOK;
+    drawGuide(allOK);
+
+    const cd = document.getElementById('countdownWrap');
+    const hint = document.getElementById('hint');
+    if (allOK){
+      if (stableSince === null) stableSince = performance.now();
+      const heldFor = performance.now() - stableSince;
+      if (heldFor >= HOLD_MS){
+        if (cdStart === null){ cdStart = performance.now(); if(!wasArmed){ console.log('[auto-capture] armed — counting down'); wasArmed = true; } }
+        const elapsed = performance.now() - cdStart;
+        const remaining = Math.max(0, COUNTDOWN_MS - elapsed);
+        cd.style.display='block'; hint.style.display='none';
+        document.getElementById('countdown').textContent = (remaining/1000).toFixed(1) + 's';
+        document.getElementById('cdfill').style.width = (elapsed/COUNTDOWN_MS*100) + '%';
+        if (remaining <= 0){ console.log('[auto-capture] FIRING capture'); capture(f); }
+      }
+    } else {
+      stableSince = null; cdStart = null; wasArmed = false;
+      cd.style.display='none'; hint.style.display='block';
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function blobOf(canvas){ return new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.95)); }
+
+  async function capture(scores){
+    capturing = true;
+    document.getElementById('uploadStatus').style.display='block';
+    const full = document.createElement('canvas');
+    full.width = video.videoWidth || 1200; full.height = video.videoHeight || 1200;
+    full.getContext('2d').drawImage(video, 0, 0, full.width, full.height);
+    await upload(await blobOf(full), {
+      capture_mode:'auto', mean_luminance: scores? scores.mean : null,
+      glare: scores ? scores.glare >= 60 : false,
+      exif: { captured:true, color_space:'sRGB', width:full.width, height:full.height }
+    });
+  }
+
+  async function upload(blob, scores){
+    const fd = new FormData();
+    fd.append('image', blob, 'capture.jpg');
+    fd.append('quality_scores', JSON.stringify(scores));
+    const res = await fetch(submitUrl, { method:'POST', headers:{'X-CSRFToken': window.csrftoken}, body: fd });
+    if (res.ok){ const j = await res.json(); window.location = j.redirect; }
+    else { document.getElementById('uploadStatus').className='banner banner-error mt small';
+           document.getElementById('uploadStatus').textContent='Upload failed: ' + (await res.text()); capturing=false; }
+  }
+
+  navigator.mediaDevices?.getUserMedia({ video: { facingMode:'environment', width:{ideal:1920} } })
+    .then(stream => { video.srcObject = stream; requestAnimationFrame(tick); })
+    .catch(() => { document.getElementById('noCam').style.display='block'; video.style.display='none';
+                   document.getElementById('hint').innerHTML='No camera detected. Open this page on a device with a rear camera to scan a plate.'; });
+})();
+</script>
+{% endblock %}

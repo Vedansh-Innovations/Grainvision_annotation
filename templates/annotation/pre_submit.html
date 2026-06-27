@@ -1,0 +1,63 @@
+{% extends 'partials/base.html' %}
+{% block title %}Review &amp; submit · {{ submission.commodity.name }} #{{ submission.sample_number }}{% endblock %}
+{% block sidebar %}{% include 'partials/sidebar.html' with active='workspace' %}{% endblock %}
+{% block crumb %}<span class="crumb">/ Review before submit — {{ submission.commodity.name }} #{{ submission.sample_number }}</span>{% endblock %}
+
+{% block content %}
+{% include 'annotation/_stepper.html' with step=4 %}
+
+<div style="max-width:880px;margin:0 auto">
+  <div class="grid grid-2">
+    <!-- Recorded weights -->
+    <div class="card">
+      <div class="card-title">Recorded weights</div>
+      <div class="legend-row"><span><span class="dot" style="background:#95A5A6"></span>Total sample</span><strong>{{ submission.total_weight_g }} g</strong></div>
+      <div class="legend-row"><span><span class="dot" style="background:var(--label-foreign)"></span>Foreign matter</span><span>{{ submission.foreign_matter_g }} g <span class="muted small">({{ submission.foreign_pct }}%)</span></span></div>
+      <div class="legend-row"><span><span class="dot" style="background:var(--label-fungal)"></span>Fungal / infected</span><span>{{ submission.fungal_grains_g }} g <span class="muted small">({{ submission.fungal_pct }}%)</span></span></div>
+      <div class="legend-row"><span><span class="dot" style="background:var(--label-immature)"></span>Immature grains</span><span>{{ submission.immature_grains_g }} g <span class="muted small">({{ submission.immature_pct }}%)</span></span></div>
+      <div class="legend-row"><span><span class="dot" style="background:var(--label-broken)"></span>Organic matter</span><span>{{ submission.organic_matter_g }} g <span class="muted small">({{ submission.organic_pct }}%)</span></span></div>
+    </div>
+
+    <!-- Particle labels -->
+    <div class="card">
+      <div class="card-title">Particle labels</div>
+      {% for r in label_rows %}
+        <div class="legend-row"><span><span class="dot" style="background:{{ r.color }}"></span>{{ r.label }}</span><span><strong>{{ r.count }}</strong> <span class="muted small">({{ r.pct }}%)</span></span></div>
+      {% endfor %}
+      <div class="legend-row"><span><span class="dot" style="background:#F1C40F"></span>Uncertain</span><strong>{{ uncertain }}</strong></div>
+    </div>
+  </div>
+
+  <!-- Capture verification -->
+  <div class="card">
+    <div class="card-title">Capture verification</div>
+    <div class="flex gap small" style="flex-wrap:wrap">
+      <span class="badge badge-approved">✓ Auto-captured</span>
+      <span class="badge badge-approved">✓ EXIF complete</span>
+      <span class="badge badge-approved">✓ sRGB</span>
+      <span class="badge {% if submission.capture_quality_scores.glare %}badge-warn{% else %}badge-approved{% endif %}">{% if submission.capture_quality_scores.glare %}⚠ Glare{% else %}✓ No glare{% endif %}</span>
+      <span class="badge">{{ submission.particle_count }} particles · {{ uncertain }} uncertain</span>
+    </div>
+  </div>
+
+  {% for w in cross_validation %}
+    <div class="banner banner-amber">{{ w.message }}</div>
+  {% endfor %}
+
+  {% if unlabeled > 0 %}
+    <div class="banner banner-error">{{ unlabeled }} particle(s) are still unlabeled. Return to the canvas and label every particle before submitting.</div>
+  {% endif %}
+
+  <div class="flex-between mt">
+    <a class="btn" href="{% url 'annotation:canvas' pk=submission.id %}">← Edit labels</a>
+    {% if unlabeled == 0 %}
+      <form method="post" action="{% url 'annotation:submit' pk=submission.id %}">
+        {% csrf_token %}
+        <button class="btn btn-primary btn-lg" type="submit">Confirm &amp; submit sample</button>
+      </form>
+    {% else %}
+      <button class="btn btn-primary btn-lg" disabled>Confirm &amp; submit sample</button>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

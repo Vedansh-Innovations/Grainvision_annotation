@@ -1,0 +1,33 @@
+{% extends 'partials/base.html' %}
+{% block title %}New sample{% endblock %}
+{% block sidebar %}{% include 'partials/sidebar.html' with active='start' %}{% endblock %}
+{% block crumb %}<span class="crumb">/ New sample</span>{% endblock %}
+
+{% block content %}
+<div style="max-width:560px;margin:0 auto">
+  <div class="card">
+    <div class="card-title">Start a new sample</div>
+    <p class="muted small">Choose the commodity and mandi, then capture the grain photo.</p>
+    <form method="post" action="{% url 'annotation:start' %}">
+      {% csrf_token %}
+      <label class="field">Commodity</label>
+      <select name="commodity" required>
+        <option value="">Select commodity…</option>
+        {% for c in commodities %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+      </select>
+
+      <label class="field mt">Mandi</label>
+      <select name="mandi" required>
+        <option value="">Select mandi…</option>
+        {% for m in mandis %}<option value="{{ m.id }}">{{ m.name }} — {{ m.state }}</option>{% endfor %}
+      </select>
+
+      <div class="flex-between mt">
+        <a class="btn" href="{% url 'annotation:workspace' %}">Cancel</a>
+        <button class="btn btn-primary btn-lg" type="submit" {% if not mandis %}disabled{% endif %}>Continue to capture →</button>
+      </div>
+    </form>
+    {% if not mandis %}<p class="amber small mt">No mandi is assigned to your account. Ask an admin to assign one before starting.</p>{% endif %}
+  </div>
+</div>
+{% endblock %}

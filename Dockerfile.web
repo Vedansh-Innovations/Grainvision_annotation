@@ -1,0 +1,25 @@
+# GrainVision web tier — LEAN image for the split (CPU web + GPU worker) setup.
+# No torch/SAM2: segmentation is offloaded to the worker via SAM2_REMOTE_URL.
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 \
+    SAM2_ENABLED=False
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements-web.txt .
+RUN pip install --upgrade pip && pip install -r requirements-web.txt
+
+COPY . .
+
+RUN SECRET_KEY=build-time-only DEBUG=False ALLOWED_HOSTS=* \
+    SAM2_ENABLED=False USE_POSTGRES=False \
+    python manage.py collectstatic --noinput
+
+RUN chmod +x docker/entrypoint.sh
+EXPOSE 8000
+ENTRYPOINT ["docker/entrypoint.sh"]

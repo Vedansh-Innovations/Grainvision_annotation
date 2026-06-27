@@ -1,0 +1,39 @@
+# ── Core framework ────────────────────────────────────────────────
+Django==5.0.6
+djangorestframework==3.15.1
+django-environ==0.11.2
+bcrypt==4.1.3
+
+# ── Image / segmentation pipeline ─────────────────────────────────
+numpy==1.26.4
+opencv-python-headless==4.9.0.80
+Pillow==10.3.0
+scikit-image==0.23.2
+shapely==2.0.4
+
+# ── SAM2 (Segment Anything Model 2) — the segmentation engine ─────
+# torch / torchvision: install the build matching your hardware.
+#   GPU (CUDA 12.1):  pip install torch==2.3.1 torchvision==0.18.1 \
+#                       --index-url https://download.pytorch.org/whl/cu121
+#   CPU only:         pip install torch==2.3.1 torchvision==0.18.1 \
+#                       --index-url https://download.pytorch.org/whl/cpu
+torch==2.3.1
+torchvision==0.18.1
+hydra-core==1.3.2
+iopath==0.1.10
+# SAM2 package (Meta). Installed from the GitHub repo:
+#   pip install "git+https://github.com/facebookresearch/sam2.git"
+# A GPU is strongly recommended; on CPU lower SAM2_POINTS_PER_SIDE (see .env.example).
+sam2 @ git+https://github.com/facebookresearch/sam2.git@main
+
+# ── Production server ─────────────────────────────────────────────
+gunicorn==22.0.0
+whitenoise==6.7.0
+
+# ── Storage (optional; MinIO/S3 compatible) ───────────────────────
+boto3==1.34.122
+django-storages==1.14.3
+requests==2.32.3
+
+# ── DB driver (PostgreSQL). SQLite needs nothing extra. ───────────
+psycopg2-binary==2.9.9

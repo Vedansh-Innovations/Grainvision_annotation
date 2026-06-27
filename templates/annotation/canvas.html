@@ -1,0 +1,318 @@
+{% extends 'partials/base.html' %}
+{% load static %}
+{% block title %}Annotate · {{ submission.commodity.name }} #{{ submission.sample_number }}{% endblock %}
+{% block sidebar %}{% include 'partials/sidebar.html' with active='workspace' %}{% endblock %}
+{% block crumb %}<span class="crumb">/ Annotate — {{ submission.commodity.name }} #{{ submission.sample_number }}</span>{% endblock %}
+
+{% block content %}
+{% include 'annotation/_stepper.html' with step=3 %}
+
+{% if rework_instructions %}
+  <div class="banner banner-amber"><strong>QC rework note:</strong> {{ rework_instructions }}</div>
+{% endif %}
+
+<div class="grid canvas-grid" style="grid-template-columns:1fr 300px;gap:18px;align-items:start">
+  <div class="card" style="padding:12px">
+    <div class="toolbar">
+      <div class="tool active" data-tool="select" title="Select &amp; label (V)">▣</div>
+      <div class="tool" data-tool="pan" title="Pan (H / hold Space)">✋</div>
+      <div class="tool" data-tool="draw" title="Draw a missed particle (B)">✎</div>
+      <span style="width:1px;height:22px;background:var(--border);margin:0 4px"></span>
+      <div class="tool" data-act="zoomin" title="Zoom in (+)">＋</div>
+      <div class="tool" data-act="zoomout" title="Zoom out (−)">－</div>
+      <div class="tool" data-act="fit" title="Fit to view (0)">⤢</div>
+      <span class="spacer"></span>
+      <label class="small muted" style="display:flex;align-items:center;gap:6px">☀
+        <input type="range" id="bright" min="60" max="170" value="100" style="width:90px">
+      </label>
+      <span class="muted small" id="autosave" style="margin-left:10px">Saved</span>
+    </div>
+
+    <div class="canvas-stage" id="stage" style="height:60vh;min-height:440px;cursor:default">
+      <svg id="svg" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%"></svg>
+      <div style="position:absolute;left:12px;top:12px" class="badge">
+        {{ submission.commodity.name }} · #{{ submission.sample_number }} · <span id="pcount">{{ submission.particle_count }}</span> particles
+      </div>
+      <div id="zoomLabel" style="position:absolute;right:12px;top:12px" class="badge muted small">100%</div>
+      <div id="drawHint" style="position:absolute;left:12px;bottom:12px;display:none" class="badge">Click to add points · double-click to finish · Esc to cancel</div>
+    </div>
+
+    <div class="mt">
+      <div class="flex-between small">
+        <span class="muted">Labeling progress</span>
+        <span><strong id="doneCount">0</strong> / <span id="totalCount">0</span></span>
+      </div>
+      <div class="progress-bar mt"><div class="fill" id="progFill" style="background:var(--teal);width:0%"></div></div>
+      <div class="flex-between mt">
+        <span class="muted small" id="remainMsg">tap a particle, then press 1–5 to label</span>
+        <a class="btn btn-primary" id="toReview" href="{% url 'annotation:pre_submit' pk=submission.id %}">Review &amp; submit →</a>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <div class="card-title">Labels <span class="muted small">(shortcut keys)</span></div>
+      <div id="quickLabels"></div>
+      <div class="legend-row" style="margin-top:8px"><span><span class="dot" style="background:#F1C40F"></span>Uncertain <span class="muted">(U)</span></span><strong id="c_uncertain">0</strong></div>
+      <div class="legend-row"><span><span class="dot" style="background:#95A5A6"></span>Unlabeled</span><strong id="c_unlabeled">0</strong></div>
+      <p class="muted small" style="margin-top:8px">Selected particle: <strong id="selName">none</strong><br>Delete with <strong>Del</strong> · deselect with <strong>Esc</strong></p>
+    </div>
+    <div class="card">
+      <div class="card-title">Segmentation</div>
+      {% for w in submission.warnings %}
+        <div class="banner banner-{% if w.level == 'orange' %}orange{% else %}amber{% endif %} small">{{ w.message }}</div>
+      {% empty %}
+        <p class="muted small">No segmentation flags raised.</p>
+      {% endfor %}
+      <div class="small muted mt">Auto-detected: <span id="autoCount">0</span> · You added: <span id="userCount">0</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Label panel (bottom sheet) -->
+<div class="label-panel" id="labelPanel">
+  <div class="flex-between">
+    <strong id="panelTitle">Particle</strong>
+    <a href="#" id="panelClose" class="muted">✕</a>
+  </div>
+  <div class="small muted" id="panelMeta" style="margin:4px 0 8px"></div>
+  <div class="banner banner-error small" id="panelFlag" style="display:none">Possible merged boundary — verify before labeling.</div>
+  <div id="panelOptions"></div>
+  <div class="flex gap mt">
+    <button class="btn" id="panelUncertain" style="flex:1">Uncertain (U)</button>
+    <button class="btn btn-danger" id="panelDelete" style="flex:1">Delete (Del)</button>
+  </div>
+</div>
+
+<script id="particles-data" type="application/json">{{ particles_json|safe }}</script>
+<script id="labels-data" type="application/json">{{ labels_json|safe }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  const CROP = {{ crop_size|safe }};
+  const cropImg = "{{ submission.crop_image.url }}";
+  const URLS = {
+    label: "{% url 'annotation:label_particle' pk=submission.id %}",
+    add: "{% url 'annotation:add_particle' pk=submission.id %}",
+    del: "{% url 'annotation:delete_particle' pk=submission.id %}",
+  };
+  let particles = JSON.parse(document.getElementById('particles-data').textContent);
+  const labels = JSON.parse(document.getElementById('labels-data').textContent);
+  const UNLABELED = "#95A5A6";
+
+  const svg = document.getElementById('svg');
+  const stage = document.getElementById('stage');
+  const W = CROP[0], H = CROP[1];
+  let view = {x:0, y:0, scale:1};   // pan/zoom of the SVG group
+  let tool = 'select', selected = null, drawing = [], lastUserAdded = [];
+  let isPanning = false, panStart = null, spaceDown = false;
+
+  const NS = 'http://www.w3.org/2000/svg';
+  function el(name, attrs){ const e=document.createElementNS(NS,name); for(const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+  function post(url, body){ return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':window.csrftoken},body:JSON.stringify(body)}).then(r=>r.json()); }
+  function ptsStr(poly){ return poly.map(p=>p.join(',')).join(' '); }
+  function hexA(hex,a){ const n=parseInt(hex.slice(1),16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
+
+  function fit(){
+    const r = stage.getBoundingClientRect();
+    const s = Math.min(r.width/W, r.height/H);
+    view.scale = s; view.x = (r.width - W*s)/2; view.y = (r.height - H*s)/2;
+    render();
+  }
+
+  function render(){
+    svg.innerHTML='';
+    const r = stage.getBoundingClientRect();
+    svg.setAttribute('viewBox', `0 0 ${r.width} ${r.height}`);
+    const g = el('g', {transform:`translate(${view.x},${view.y}) scale(${view.scale})`});
+
+    const img = el('image', {x:0,y:0,width:W,height:H,preserveAspectRatio:'none'});
+    // brightness must be a CSS filter (style), NOT the SVG `filter` attribute —
+    // the SVG attribute only accepts url(#id) and an invalid value hides the image.
+    img.style.filter = `brightness(${document.getElementById('bright').value}%)`;
+    img.setAttribute('href', cropImg);
+    img.setAttributeNS('http://www.w3.org/1999/xlink','href', cropImg);
+    g.appendChild(img);
+
+    particles.forEach(p=>{
+      const isUn = p.label==='unlabeled' && !p.uncertain;
+      const col = p.uncertain ? '#F1C40F' : (isUn ? UNLABELED : p.color);
+      const poly = el('polygon', {
+        points: ptsStr(p.polygon),
+        fill: col, 'fill-opacity': isUn?0.16:0.40,
+        stroke: selected===p.id ? '#1B2A4A' : (p.flagged_by_seg ? '#E67E22' : col),
+        'stroke-width': (selected===p.id?3:(p.flagged_by_seg?2.4:1.5))/view.scale,
+        'vector-effect':'non-scaling-stroke',
+      });
+      if (isUn) poly.setAttribute('stroke-dasharray','6 4');
+      if (selected===p.id) poly.setAttribute('stroke-dasharray','5 3');
+      poly.style.cursor = tool==='select' ? 'pointer':'inherit';
+      poly.addEventListener('mousedown', e=>{ if(tool==='select'){ e.stopPropagation(); selectParticle(p); } });
+      g.appendChild(poly);
+    });
+
+    if (drawing.length){
+      g.appendChild(el('polyline',{points:ptsStr(drawing),fill:'none',stroke:'#1ABC9C','stroke-width':2/view.scale,'vector-effect':'non-scaling-stroke'}));
+      drawing.forEach(pt=> g.appendChild(el('circle',{cx:pt[0],cy:pt[1],r:4/view.scale,fill:'#1ABC9C'})));
+    }
+    svg.appendChild(g);
+    document.getElementById('zoomLabel').textContent = Math.round(view.scale/baseScale()*100)+'%';
+    updateCounts();
+  }
+  function baseScale(){ const r=stage.getBoundingClientRect(); return Math.min(r.width/W, r.height/H); }
+
+  // ── coordinate helpers ──
+  function toImg(clientX, clientY){
+    const r = stage.getBoundingClientRect();
+    return [ (clientX - r.left - view.x)/view.scale, (clientY - r.top - view.y)/view.scale ];
+  }
+
+  // ── selection + labeling ──
+  function selectParticle(p){ selected = p.id; openPanel(p); render(); }
+  function deselect(){ selected=null; closePanel(); render(); }
+
+  function quickLabelsPanel(){
+    const box = document.getElementById('quickLabels'); box.innerHTML='';
+    labels.forEach((l,i)=>{
+      const row = document.createElement('div'); row.className='legend-row';
+      row.innerHTML = `<span><span class="dot" style="background:${l.color}"></span>${l.label} <span class="muted">(${i+1})</span></span><strong id="c_${l.value}">0</strong>`;
+      box.appendChild(row);
+    });
+  }
+
+  function openPanel(p){
+    document.getElementById('panelTitle').textContent='Particle #'+p.particle_id;
+    document.getElementById('selName').textContent='#'+p.particle_id;
+    const f=p.features||{};
+    document.getElementById('panelMeta').textContent =
+      `Area ${Math.round(f.area||0)} px² · Solidity ${(f.solidity??0).toFixed?Number(f.solidity).toFixed(2):f.solidity}`;
+    document.getElementById('panelFlag').style.display = p.flagged_by_seg?'block':'none';
+    const opts=document.getElementById('panelOptions'); opts.innerHTML='';
+    labels.forEach((l,i)=>{
+      const d=document.createElement('div'); d.className='label-opt';
+      d.style.background=hexA(l.color,0.14); d.style.borderColor=hexA(l.color,0.42);
+      d.innerHTML=`<span class="dot" style="background:${l.color}"></span>${l.label} <span class="muted" style="margin-left:auto">${i+1}</span>`;
+      d.onclick=()=>applyLabel(p,l.value);
+      opts.appendChild(d);
+    });
+    document.getElementById('panelUncertain').onclick=()=>applyLabel(p,'uncertain');
+    document.getElementById('panelDelete').onclick=()=>removeParticle(p);
+    document.getElementById('labelPanel').classList.add('open');
+  }
+  function closePanel(){ document.getElementById('labelPanel').classList.remove('open'); }
+  document.getElementById('panelClose').onclick=e=>{e.preventDefault(); deselect();};
+
+  function applyLabel(p,label){
+    post(URLS.label,{particle_pk:p.id,label}).then(res=>{
+      if(!res.ok) return;
+      if(label==='uncertain'){ p.uncertain=true; }
+      else { p.label=res.label; p.uncertain=false; p.color=res.color; }
+      flash(); render();
+      // auto-advance to next unlabeled
+      const next = particles.find(x=>x.label==='unlabeled' && !x.uncertain);
+      if(next){ selectParticle(next); } else { deselect(); }
+    });
+  }
+  function removeParticle(p){
+    post(URLS.del,{particle_pk:p.id}).then(()=>{ particles=particles.filter(x=>x.id!==p.id); deselect(); });
+  }
+  function flash(){ const a=document.getElementById('autosave'); a.textContent='Saved ✓'; }
+
+  function updateCounts(){
+    const counts={uncertain:0,unlabeled:0}; labels.forEach(l=>counts[l.value]=0);
+    particles.forEach(p=>{ if(p.uncertain) counts.uncertain++; else if(p.label==='unlabeled') counts.unlabeled++; else counts[p.label]=(counts[p.label]||0)+1; });
+    labels.forEach(l=>{ const e=document.getElementById('c_'+l.value); if(e) e.textContent=counts[l.value]||0; });
+    document.getElementById('c_uncertain').textContent=counts.uncertain;
+    document.getElementById('c_unlabeled').textContent=counts.unlabeled;
+    document.getElementById('autoCount').textContent=particles.filter(p=>p.origin==='auto').length;
+    document.getElementById('userCount').textContent=particles.filter(p=>p.origin==='user').length;
+    document.getElementById('pcount').textContent=particles.length;
+
+    const total=particles.length, done=particles.filter(p=>p.label!=='unlabeled'||p.uncertain).length;
+    document.getElementById('doneCount').textContent=done;
+    document.getElementById('totalCount').textContent=total;
+    document.getElementById('progFill').style.width = total?(done/total*100)+'%':'0%';
+    const btn=document.getElementById('toReview'), msg=document.getElementById('remainMsg'), remain=total-done;
+    if(remain>0){ msg.textContent=remain+' particle(s) left — select one and press 1–5'; btn.style.pointerEvents='none'; btn.style.opacity=.5; }
+    else { msg.textContent='All particles labeled — ready for review'; btn.style.pointerEvents=''; btn.style.opacity=1; }
+  }
+
+  // ── tools ──
+  document.querySelectorAll('.tool[data-tool]').forEach(t=>{
+    t.onclick=()=>{ document.querySelectorAll('.tool[data-tool]').forEach(x=>x.classList.remove('active'));
+      t.classList.add('active'); tool=t.dataset.tool; drawing=[];
+      document.getElementById('drawHint').style.display = tool==='draw'?'block':'none';
+      stage.style.cursor = tool==='pan'?'grab':(tool==='draw'?'crosshair':'default'); render(); };
+  });
+  document.querySelectorAll('.tool[data-act]').forEach(t=>{
+    t.onclick=()=>{ const a=t.dataset.act;
+      if(a==='zoomin') zoomBy(1.25);
+      else if(a==='zoomout') zoomBy(0.8);
+      else if(a==='fit') fit(); };
+  });
+  function zoomBy(factor, cx, cy){
+    const r=stage.getBoundingClientRect();
+    cx = cx==null ? r.width/2 : cx; cy = cy==null ? r.height/2 : cy;
+    const ix=(cx-view.x)/view.scale, iy=(cy-view.y)/view.scale;
+    view.scale*=factor;
+    view.x = cx - ix*view.scale; view.y = cy - iy*view.scale;
+    render();
+  }
+
+  // wheel zoom
+  stage.addEventListener('wheel', e=>{ e.preventDefault();
+    const r=stage.getBoundingClientRect();
+    zoomBy(e.deltaY<0?1.12:0.89, e.clientX-r.left, e.clientY-r.top);
+  }, {passive:false});
+
+  // pan + draw via mouse
+  stage.addEventListener('mousedown', e=>{
+    if(tool==='pan' || spaceDown){ isPanning=true; panStart={x:e.clientX-view.x, y:e.clientY-view.y}; stage.style.cursor='grabbing'; return; }
+    if(tool==='draw'){ const [x,y]=toImg(e.clientX,e.clientY); drawing.push([Math.round(x),Math.round(y)]); render(); }
+  });
+  window.addEventListener('mousemove', e=>{
+    if(isPanning){ view.x=e.clientX-panStart.x; view.y=e.clientY-panStart.y; render(); }
+  });
+  window.addEventListener('mouseup', ()=>{ if(isPanning){ isPanning=false; stage.style.cursor= tool==='pan'?'grab':'default'; } });
+  stage.addEventListener('dblclick', e=>{
+    if(tool==='draw' && drawing.length>=3){
+      post(URLS.add,{polygon:drawing}).then(res=>{
+        if(res.ok){ particles.push({id:res.id,particle_id:res.particle_id,label:'unlabeled',color:UNLABELED,polygon:drawing.slice(),origin:'user',uncertain:false,flagged_by_seg:false,features:{}}); lastUserAdded.push(res.id); }
+        drawing=[]; render();
+      });
+    }
+  });
+  // click empty space deselects (select mode)
+  svg.addEventListener('mousedown', e=>{ if(tool==='select' && e.target===svg){ deselect(); } });
+
+  // ── keyboard ──
+  window.addEventListener('keydown', e=>{
+    if(e.target.tagName==='INPUT') return;
+    if(e.code==='Space'){ spaceDown=true; stage.style.cursor='grab'; }
+    const sel = selected!=null ? particles.find(p=>p.id===selected) : null;
+    if(e.key>='1' && e.key<='5'){ const l=labels[parseInt(e.key)-1]; if(l&&sel) applyLabel(sel,l.value); }
+    else if(e.key==='u'||e.key==='U'){ if(sel) applyLabel(sel,'uncertain'); }
+    else if(e.key==='Delete'||e.key==='Backspace'){ if(sel){ e.preventDefault(); removeParticle(sel); } }
+    else if(e.key==='Escape'){ drawing=[]; deselect(); }
+    else if(e.key==='+'||e.key==='='){ zoomBy(1.25); }
+    else if(e.key==='-'){ zoomBy(0.8); }
+    else if(e.key==='0'){ fit(); }
+    else if(e.key==='v'||e.key==='V'){ document.querySelector('.tool[data-tool=select]').click(); }
+    else if(e.key==='h'||e.key==='H'){ document.querySelector('.tool[data-tool=pan]').click(); }
+    else if(e.key==='b'||e.key==='B'){ document.querySelector('.tool[data-tool=draw]').click(); }
+  });
+  window.addEventListener('keyup', e=>{ if(e.code==='Space'){ spaceDown=false; stage.style.cursor= tool==='pan'?'grab':'default'; } });
+
+  document.getElementById('bright').addEventListener('input', render);
+  window.addEventListener('resize', fit);
+
+  quickLabelsPanel();
+  // ensure background image is loaded before first fit for correct sizing
+  const pre = new Image(); pre.onload = fit; pre.onerror = fit; pre.src = cropImg;
+  fit();
+})();
+</script>
+{% endblock %}

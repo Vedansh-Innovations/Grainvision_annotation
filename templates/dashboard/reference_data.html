@@ -1,0 +1,97 @@
+{% extends 'partials/base.html' %}
+{% block title %}Mandis &amp; commodities{% endblock %}
+{% block sidebar %}{% include 'partials/sidebar.html' with active='reference' %}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div><h2 style="margin:0">Mandis &amp; commodities</h2><p class="muted small" style="margin:2px 0 0">Reference data used across capture, annotation and exports.</p></div>
+</div>
+
+<div class="grid grid-2" style="align-items:start">
+  <!-- Mandis -->
+  <div>
+    <div class="card">
+      <div class="card-title">Add mandi</div>
+      <form method="post" action="{% url 'dashboard:mandi_create' %}">
+        {% csrf_token %}
+        <label class="field">Name</label>
+        <input name="name" placeholder="Indore Mandi" required>
+        <div class="grid grid-2 mt">
+          <div><label class="field">District</label><input name="district" placeholder="Indore" required></div>
+          <div><label class="field">State</label><input name="state" placeholder="Madhya Pradesh" required></div>
+        </div>
+        <button class="btn btn-primary mt" type="submit">Add mandi</button>
+      </form>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden">
+      <table class="data">
+        <thead><tr><th>Mandi</th><th>District</th><th>State</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for m in mandis %}
+            <tr class="{% if not m.active %}dimmed{% endif %}">
+              <td><strong>{{ m.name }}</strong></td>
+              <td class="small">{{ m.district }}</td>
+              <td class="small">{{ m.state }}</td>
+              <td>{% if m.active %}<span class="badge badge-approved">Active</span>{% else %}<span class="badge muted">Inactive</span>{% endif %}</td>
+              <td>
+                <form method="post" action="{% url 'dashboard:mandi_toggle' pk=m.id %}" style="display:inline">
+                  {% csrf_token %}<button class="btn small" type="submit">{% if m.active %}Deactivate{% else %}Activate{% endif %}</button>
+                </form>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5" class="muted" style="text-align:center;padding:22px">No mandis yet — add one above.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Commodities -->
+  <div>
+    <div class="card">
+      <div class="card-title">Add commodity</div>
+      <form method="post" action="{% url 'dashboard:commodity_create' %}">
+        {% csrf_token %}
+        <div class="grid grid-2">
+          <div><label class="field">Code</label><input name="code" placeholder="WHEAT" required></div>
+          <div><label class="field">Name</label><input name="name" placeholder="Wheat" required></div>
+        </div>
+        <div class="grid grid-2 mt">
+          <div><label class="field">Min particle area (px)</label><input name="min_particle_area_px" inputmode="numeric" value="60"></div>
+          <div><label class="field">Max particle area (px)</label><input name="max_particle_area_px" inputmode="numeric" value="60000"></div>
+          <div><label class="field">Expected min count</label><input name="expected_min_count" inputmode="numeric" value="20"></div>
+          <div><label class="field">Expected max count</label><input name="expected_max_count" inputmode="numeric" value="500"></div>
+          <div><label class="field">Target approved samples</label><input name="target_samples" inputmode="numeric" value="500"></div>
+        </div>
+        <button class="btn btn-primary mt" type="submit">Add commodity</button>
+      </form>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden">
+      <table class="data">
+        <thead><tr><th>Code</th><th>Name</th><th>Approved</th><th>Target</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for r in commodities %}
+            <tr class="{% if not r.obj.active %}dimmed{% endif %}">
+              <td><strong>{{ r.obj.code }}</strong></td>
+              <td>{{ r.obj.name }}</td>
+              <td>{{ r.approved }}</td>
+              <td class="muted">{{ r.obj.target_samples }}</td>
+              <td>{% if r.obj.active %}<span class="badge badge-approved">Active</span>{% else %}<span class="badge muted">Inactive</span>{% endif %}</td>
+              <td>
+                <form method="post" action="{% url 'dashboard:commodity_toggle' pk=r.obj.id %}" style="display:inline">
+                  {% csrf_token %}<button class="btn small" type="submit">{% if r.obj.active %}Deactivate{% else %}Activate{% endif %}</button>
+                </form>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="muted" style="text-align:center;padding:22px">No commodities yet — add one above.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
