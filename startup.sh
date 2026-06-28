@@ -1,12 +1,21 @@
 #!/bin/bash
 # Startup for deploying GrainVision as CODE on Azure App Service (no Docker).
-# App Service runs this via the "Startup Command": bash startup.sh
+# Set as the "Startup Command":  bash startup.sh
 set -e
 
 echo "[startup] preparing data directories..."
-# Make sure the folders for the database and uploads exist (e.g. /home/data),
-# otherwise SQLite can't create its file and uploads have nowhere to go.
 mkdir -p "$(dirname "${SQLITE_PATH:-db.sqlite3}")" "${MEDIA_ROOT:-media}" 2>/dev/null || true
+
+# Optional: SAM2-on-CPU. Only downloads the model when SAM2 is turned on.
+if [ "${SAM2_ENABLED}" = "True" ] && [ "${SAM2_DEVICE:-cpu}" = "cpu" ]; then
+  MODELS="$(dirname "${SAM2_CHECKPOINT:-/home/data/models/sam2.1_hiera_small.pt}")"
+  mkdir -p "$MODELS" 2>/dev/null || true
+  if [ ! -f "${SAM2_CHECKPOINT:-/home/data/models/sam2.1_hiera_small.pt}" ]; then
+    echo "[startup] downloading SAM2 checkpoint (one-time)..."
+    curl -L -o "${SAM2_CHECKPOINT:-/home/data/models/sam2.1_hiera_small.pt}" \
+      https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt || true
+  fi
+fi
 
 echo "[startup] migrating database..."
 python manage.py migrate --noinput
