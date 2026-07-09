@@ -345,6 +345,25 @@ def add_particle(request, pk):
     label = data.get("label")
     if label not in ParticleLabel.values:
         label = ParticleLabel.UNLABELED
+
+    snapped = False
+    if data.get("snap") and sub.crop_image:
+        try:
+            import cv2
+            import numpy as np
+            from ml.snap import snap_polygon
+            with sub.crop_image.open("rb") as f:
+                arr = np.frombuffer(f.read(), np.uint8)
+            bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            min_a = getattr(sub.commodity, "min_particle_area_px", 20) or 20
+            max_a = getattr(sub.commodity, "max_particle_area_px", 10**9) or 10**9
+            snap = snap_polygon(bgr, polygon, min_a, max_a)
+            if snap and len(snap) >= 3:
+                polygon = snap
+                snapped = True
+        except Exception:
+            pass
+
     next_id = (sub.particles.order_by("-particle_id")
                .values_list("particle_id", flat=True).first() or 0) + 1
     p = Particle.objects.create(
@@ -354,6 +373,7 @@ def add_particle(request, pk):
     return JsonResponse({
         "ok": True, "id": p.id, "particle_id": p.particle_id,
         "label": p.label, "color": LABEL_COLORS[ParticleLabel(p.label)],
+        "polygon": polygon, "snapped": snapped,
         "remaining": sub.unlabeled_count,
     })
 
@@ -414,7 +434,9 @@ def pre_submit(request, pk):
         "unlabeled": sub.unlabeled_count,
         "cross_validation": cross_validate(sub),
         "particles_json": json.dumps([
-            {"polygon": p.polygon, "color": LABEL_COLORS[ParticleLabel(p.effective_label)]}
+            {"polygon": p.polygon,
+             "color": LABEL_COLORS[ParticleLabel(p.effective_label)],
+             "unlabeled": p.effective_label == ParticleLabel.UNLABELED}
             for p in sub.particles.all()
         ]),
         "crop_size": sub.capture_quality_scores.get("crop_size", [1000, 1000]),
