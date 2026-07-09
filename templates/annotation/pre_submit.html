@@ -7,6 +7,29 @@
 {% include 'annotation/_stepper.html' with step=4 %}
 
 <div style="max-width:880px;margin:0 auto">
+  <div class="card">
+    <div class="card-title">Annotated plate</div>
+    <div style="background:#0b1020;border-radius:10px;overflow:hidden">
+      <svg id="review-svg" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block"></svg>
+    </div>
+    <p class="muted small mt">{{ submission.particle_count }} grains outlined. Review the labels below, then submit.</p>
+  </div>
+  <script id="rev-particles" type="application/json">{{ particles_json|safe }}</script>
+  <script>
+  (function(){
+    const C={{ crop_size|safe }}, W=C[0],H=C[1];
+    const ps=JSON.parse(document.getElementById('rev-particles').textContent);
+    const svg=document.getElementById('review-svg'); svg.setAttribute('viewBox','0 0 '+W+' '+H);
+    const NS='http://www.w3.org/2000/svg';
+    const img=document.createElementNS(NS,'image');
+    img.setAttributeNS('http://www.w3.org/1999/xlink','href',"{{ submission.crop_image.url }}");
+    img.setAttribute('href',"{{ submission.crop_image.url }}");
+    img.setAttribute('width',W);img.setAttribute('height',H); svg.appendChild(img);
+    ps.forEach(p=>{const pl=document.createElementNS(NS,'polygon');pl.setAttribute('points',p.polygon.map(q=>q.join(',')).join(' '));pl.setAttribute('fill','none');pl.setAttribute('stroke',p.color);pl.setAttribute('stroke-width',Math.max(1,W/900));svg.appendChild(pl);});
+  })();
+  </script>
+</div>
+<div style="max-width:880px;margin:0 auto">
   <div class="grid grid-2">
     <!-- Recorded weights -->
     <div class="card">

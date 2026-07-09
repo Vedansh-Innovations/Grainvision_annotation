@@ -26,17 +26,28 @@
 
     <div class="card" style="padding:0;overflow:hidden">
       <table class="data">
-        <thead><tr><th>Mandi</th><th>District</th><th>State</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Mandi</th><th>State</th><th>Commodities</th><th>Status</th><th></th></tr></thead>
         <tbody>
-          {% for m in mandis %}
-            <tr class="{% if not m.active %}dimmed{% endif %}">
-              <td><strong>{{ m.name }}</strong></td>
-              <td class="small">{{ m.district }}</td>
-              <td class="small">{{ m.state }}</td>
-              <td>{% if m.active %}<span class="badge badge-approved">Active</span>{% else %}<span class="badge muted">Inactive</span>{% endif %}</td>
+          {% for row in mandi_rows %}
+            <tr class="{% if not row.obj.active %}dimmed{% endif %}">
+              <td><strong>{{ row.obj.name }}</strong><div class="muted small">{{ row.obj.district }}</div></td>
+              <td class="small">{{ row.obj.state }}</td>
+              <td class="small">
+                <details>
+                  <summary style="cursor:pointer">{{ row.chosen_names }}</summary>
+                  <form method="post" action="{% url 'dashboard:mandi_set_commodities' pk=row.obj.id %}" style="margin-top:6px">
+                    {% csrf_token %}
+                    {% for c in all_commodities %}
+                      <label style="display:block;font-weight:400"><input type="checkbox" name="commodities" value="{{ c.id }}" {% if c.id in row.chosen_ids %}checked{% endif %}> {{ c.name }}</label>
+                    {% endfor %}
+                    <button class="btn btn-primary small mt" type="submit">Save commodities</button>
+                  </form>
+                </details>
+              </td>
+              <td>{% if row.obj.active %}<span class="badge badge-approved">Active</span>{% else %}<span class="badge muted">Inactive</span>{% endif %}</td>
               <td>
-                <form method="post" action="{% url 'dashboard:mandi_toggle' pk=m.id %}" style="display:inline">
-                  {% csrf_token %}<button class="btn small" type="submit">{% if m.active %}Deactivate{% else %}Activate{% endif %}</button>
+                <form method="post" action="{% url 'dashboard:mandi_toggle' pk=row.obj.id %}" style="display:inline">
+                  {% csrf_token %}<button class="btn small" type="submit">{% if row.obj.active %}Deactivate{% else %}Activate{% endif %}</button>
                 </form>
               </td>
             </tr>

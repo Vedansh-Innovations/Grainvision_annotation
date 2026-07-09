@@ -1,0 +1,44 @@
+{% extends 'partials/base.html' %}
+{% block title %}All submissions{% endblock %}
+{% block sidebar %}{% include 'partials/sidebar.html' with active='submissions' %}{% endblock %}
+{% block crumb %}<span class="crumb">/ All submissions</span>{% endblock %}
+{% block content %}
+<div class="flex-between"><h2 style="margin:0">All submissions <span class="muted small">({{ total }})</span></h2></div>
+<form method="get" class="flex gap small mt" style="flex-wrap:wrap">
+  <select name="mandi"><option value="">All mandis</option>{% for m in mandis %}<option value="{{ m.id }}" {% if f.mandi == m.id|stringformat:'s' %}selected{% endif %}>{{ m.name }}</option>{% endfor %}</select>
+  <select name="commodity"><option value="">All commodities</option>{% for c in commodities %}<option value="{{ c.code }}" {% if f.commodity == c.code %}selected{% endif %}>{{ c.name }}</option>{% endfor %}</select>
+  <select name="assayer"><option value="">All assayers</option>{% for a in assayers %}<option value="{{ a.id }}" {% if f.assayer == a.id|stringformat:'s' %}selected{% endif %}>{{ a.get_full_name|default:a.username }}</option>{% endfor %}</select>
+  <select name="qc"><option value="">All QC reviewers</option>{% for a in reviewers %}<option value="{{ a.id }}" {% if f.qc == a.id|stringformat:'s' %}selected{% endif %}>{{ a.get_full_name|default:a.username }}</option>{% endfor %}</select>
+  <select name="status"><option value="">Any status</option>{% for v,l in statuses %}<option value="{{ v }}" {% if f.status == v %}selected{% endif %}>{{ l }}</option>{% endfor %}</select>
+  <input type="date" name="from" value="{{ f.from }}"><input type="date" name="to" value="{{ f.to }}">
+  <button class="btn btn-primary small" type="submit">Filter</button>
+  <a class="btn small" href="{% url 'dashboard:submissions' %}">Reset</a>
+</form>
+
+<div class="card mt" style="padding:0;overflow:hidden">
+  <table class="data">
+    <thead><tr><th>Sample</th><th>Commodity</th><th>Mandi</th><th>Assayer</th><th>QC reviewer</th><th>Status</th><th>Submitted</th><th></th></tr></thead>
+    <tbody>
+      {% for s in page.object_list %}
+        <tr>
+          <td><strong>#{{ s.sample_number }}</strong> <span class="muted small">{{ s.short_id }}</span></td>
+          <td>{{ s.commodity.name }}</td>
+          <td>{{ s.mandi.name }}</td>
+          <td>{{ s.assayer.get_full_name|default:s.assayer.username }}</td>
+          <td>{{ s.qc_reviewer.get_full_name|default:s.qc_reviewer.username|default:"—" }}</td>
+          <td><span class="badge">{{ s.get_status_display }}</span></td>
+          <td class="small">{{ s.submitted_at|date:"d M Y H:i" }}</td>
+          <td>
+            <form method="post" action="{% url 'dashboard:admin_rework' pk=s.id %}" onsubmit="return confirm('Send this sample back to the assayer for rework?')" style="display:inline">
+              {% csrf_token %}<input type="hidden" name="notes" value="Returned by admin for rework."><button class="btn small" type="submit">Send to rework</button>
+            </form>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="8" class="muted" style="text-align:center;padding:24px">No submissions match these filters.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if page.has_other_pages %}<div class="flex gap mt small">{% if page.has_previous %}<a class="btn small" href="?page={{ page.previous_page_number }}">← Prev</a>{% endif %}<span class="muted">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a class="btn small" href="?page={{ page.next_page_number }}">Next →</a>{% endif %}</div>{% endif %}
+{% endblock %}

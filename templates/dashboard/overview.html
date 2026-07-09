@@ -11,13 +11,20 @@
   <div class="metric"><div class="value">{{ total_submissions }}</div><div class="label">Total submissions</div></div>
   <div class="metric"><div class="value green">{{ approval_rate }}%</div><div class="label">Approval rate</div></div>
   <div class="metric"><div class="value amber">{{ pending_qc }}</div><div class="label">Pending QC</div></div>
-  <div class="metric"><div class="value">{{ total_particles }}</div><div class="label">Total particles</div></div>
+  <div class="metric"><div class="value" style="color:#c0392b">{{ rejected_count }}</div><div class="label">Rejected samples</div></div>
 </div>
 
 <div class="grid grid-2 mt">
   <!-- Label distribution -->
   <div class="card">
-    <div class="card-title">Label distribution — all approved</div>
+    <div class="card-title">Label distribution</div>
+    <form method="get" class="flex gap small" style="flex-wrap:wrap;margin-bottom:10px">
+      <select name="mandi"><option value="">All mandis</option>{% for m in mandis %}<option value="{{ m.id }}" {% if f_mandi == m.id|stringformat:'s' %}selected{% endif %}>{{ m.name }}</option>{% endfor %}</select>
+      <select name="assayer"><option value="">All assayers</option>{% for a in assayers %}<option value="{{ a.id }}" {% if f_assayer == a.id|stringformat:'s' %}selected{% endif %}>{{ a.get_full_name|default:a.username }}</option>{% endfor %}</select>
+      <input type="date" name="from" value="{{ f_from }}"><input type="date" name="to" value="{{ f_to }}">
+      <button class="btn btn-primary small" type="submit">Filter</button>
+      <a class="btn small" href="{% url 'dashboard:overview' %}">Reset</a>
+    </form>
     {% for r in label_dist %}
       <div class="dist-row">
         <span class="name"><span class="dot" style="background:{{ r.color }}"></span>{{ r.label }}</span>
@@ -48,27 +55,24 @@
   </div>
 </div>
 
-<!-- Assayer performance -->
+<!-- Samples completed per assayer, by mandi -->
 <div class="card mt">
-  <div class="card-title">Assayer performance this week</div>
+  <div class="card-title">Samples completed — by assayer & mandi</div>
   <table class="data">
-    <thead><tr><th>Name</th><th>Samples</th><th>Approval rate</th><th>Uncertain rate</th><th>Avg particles</th></tr></thead>
+    <thead><tr><th>Assayer</th><th>Mandi</th><th>Samples</th></tr></thead>
     <tbody>
-      {% for a in assayer_rows %}
-        <tr class="{% if a.flagged %}flagged{% endif %}">
-          <td>{{ a.name }}</td>
-          <td>{{ a.samples }}</td>
-          <td class="{% if a.approval_rate < 88 %}amber{% else %}green{% endif %}">{{ a.approval_rate }}%</td>
-          <td class="{% if a.uncertain_rate > 5 %}amber{% else %}green{% endif %}">{{ a.uncertain_rate }}%</td>
-          <td>{{ a.avg_particles }}</td>
+      {% for a in assayer_mandi %}
+        {% for r in a.rows %}
+        <tr>
+          {% if forloop.first %}<td rowspan="{{ a.rows|length }}"><strong>{{ a.name }}</strong><div class="muted small">{{ a.total }} total</div></td>{% endif %}
+          <td>{{ r.mandi }}</td>
+          <td>{{ r.n }}</td>
         </tr>
+        {% endfor %}
       {% empty %}
-        <tr><td colspan="5" class="muted" style="text-align:center;padding:24px">No assayer activity in the last 7 days.</td></tr>
+        <tr><td colspan="3" class="muted" style="text-align:center;padding:24px">No submissions yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>
-  {% for a in assayer_rows %}{% if a.flagged %}
-    <div class="banner banner-amber small">{{ a.name }}: approval {{ a.approval_rate }}% / uncertain {{ a.uncertain_rate }}% — review recent rejections and consider a retraining session.</div>
-  {% endif %}{% endfor %}
 </div>
 {% endblock %}

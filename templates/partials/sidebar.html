@@ -5,6 +5,7 @@
     <a href="{% url 'dashboard:overview' %}" class="{% if active == 'overview' %}active{% endif %}">Dashboard</a>
     <a href="{% url 'dashboard:user_management' %}" class="{% if active == 'users' %}active{% endif %}">Users</a>
     <a href="{% url 'dashboard:reference_data' %}" class="{% if active == 'reference' %}active{% endif %}">Mandis &amp; commodities</a>
+    <a href="{% url 'dashboard:submissions' %}" class="{% if active == 'submissions' %}active{% endif %}">All submissions</a>
     <div class="group">Data</div>
     <a href="{% url 'qc:queue' %}" class="{% if active == 'queue' %}active{% endif %}">QC queue
       {% if pending_count %}<span class="pill">{{ pending_count }}</span>{% endif %}</a>

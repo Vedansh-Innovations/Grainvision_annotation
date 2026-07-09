@@ -11,6 +11,14 @@
 </div>
 
 <form method="get" class="flex gap mb">
+  <select name="assayer" onchange="this.form.submit()">
+    <option value="">All assayers</option>
+    {% for a in assayers %}<option value="{{ a.id }}" {% if selected_assayer == a.id|stringformat:'s' %}selected{% endif %}>{{ a.get_full_name|default:a.username }}</option>{% endfor %}
+  </select>
+  <select name="mandi" onchange="this.form.submit()">
+    <option value="">All mandis</option>
+    {% for m in mandis %}<option value="{{ m.id }}" {% if selected_mandi == m.id|stringformat:'s' %}selected{% endif %}>{{ m.name }}</option>{% endfor %}
+  </select>
   <select name="commodity" onchange="this.form.submit()">
     <option value="">All commodities</option>
     {% for c in commodities %}
