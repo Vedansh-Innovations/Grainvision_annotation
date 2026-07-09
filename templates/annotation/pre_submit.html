@@ -12,7 +12,7 @@
     <div style="background:#0b1020;border-radius:10px;overflow:hidden">
       <svg id="review-svg" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block"></svg>
     </div>
-    <p class="muted small mt">{{ submission.particle_count }} grains outlined. Review the labels below, then submit.</p>
+    <p class="muted small mt" id="review-caption">{{ submission.particle_count }} grains outlined.</p>
   </div>
   <script id="rev-particles" type="application/json">{{ particles_json|safe }}</script>
   <script>
@@ -25,7 +25,13 @@
     img.setAttributeNS('http://www.w3.org/1999/xlink','href',"{{ submission.crop_image.url }}");
     img.setAttribute('href',"{{ submission.crop_image.url }}");
     img.setAttribute('width',W);img.setAttribute('height',H); svg.appendChild(img);
-    ps.forEach(p=>{const pl=document.createElementNS(NS,'polygon');pl.setAttribute('points',p.polygon.map(q=>q.join(',')).join(' '));pl.setAttribute('fill','none');pl.setAttribute('stroke',p.color);pl.setAttribute('stroke-width',Math.max(1,W/900));svg.appendChild(pl);});
+    const sw=Math.max(1,W/900); let nUn=0;
+    // draw labeled first, then unlabeled on top so the warnings are visible
+    ps.filter(p=>!p.unlabeled).forEach(p=>{const pl=document.createElementNS(NS,'polygon');pl.setAttribute('points',p.polygon.map(q=>q.join(',')).join(' '));pl.setAttribute('fill','none');pl.setAttribute('stroke',p.color);pl.setAttribute('stroke-width',sw);svg.appendChild(pl);});
+    ps.filter(p=>p.unlabeled).forEach(p=>{nUn++;const pl=document.createElementNS(NS,'polygon');pl.setAttribute('points',p.polygon.map(q=>q.join(',')).join(' '));pl.setAttribute('fill','rgba(241,196,15,.35)');pl.setAttribute('stroke','#F1C40F');pl.setAttribute('stroke-width',sw*2);pl.setAttribute('stroke-dasharray',(sw*4)+','+(sw*3));svg.appendChild(pl);});
+    const cap=document.getElementById('review-caption');
+    if(nUn>0){cap.innerHTML='<span style="color:#b7791f;font-weight:600">⚠ '+nUn+' grain'+(nUn>1?'s':'')+' still unlabeled</span> (highlighted in yellow). You can submit, but labeling them improves the dataset.';}
+    else{cap.textContent=ps.length+' grains outlined — all labeled.';}
   })();
   </script>
 </div>

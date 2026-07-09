@@ -24,8 +24,8 @@
           <td><strong>#{{ s.sample_number }}</strong> <span class="muted small">{{ s.short_id }}</span></td>
           <td>{{ s.commodity.name }}</td>
           <td>{{ s.mandi.name }}</td>
-          <td>{{ s.assayer.get_full_name|default:s.assayer.username }}</td>
-          <td>{{ s.qc_reviewer.get_full_name|default:s.qc_reviewer.username|default:"—" }}</td>
+          <td>{% if s.assayer %}{{ s.assayer.get_full_name|default:s.assayer.username }}{% else %}—{% endif %}</td>
+          <td>{% if s.qc_reviewer %}{{ s.qc_reviewer.get_full_name|default:s.qc_reviewer.username }}{% else %}—{% endif %}</td>
           <td><span class="badge">{{ s.get_status_display }}</span></td>
           <td class="small">{{ s.submitted_at|date:"d M Y H:i" }}</td>
           <td>

@@ -53,6 +53,7 @@
     <div class="tbtn" data-tool="rect" title="Rectangle (R)">▭</div>
     <div class="tbtn" data-tool="ellipse" title="Ellipse / round (O)">◯</div>
     <div class="tbtn" data-tool="point" title="Point (T)">＋</div>
+    <div class="tbtn active" data-act="wand" title="Magic wand — snap drawn shapes to the grain (W)">🪄</div>
     <div class="sep"></div>
     <div class="tbtn" data-tool="pan" title="Pan (H)">✋</div>
     <div class="tbtn" data-act="zoomin" title="Zoom in (+)">🔍</div>
@@ -111,7 +112,7 @@
   let view={x:0,y:0,scale:1}, tool='select', activeLabel=(labels[0]&&labels[0].value)||'good';
   let sel=new Set(), draft=null, dragVert=null, box=null;
   let panning=false, panStart=null, spaceDown=false;
-  let pinch=null;
+  let pinch=null, magicWand=true;
 
   const el=(n,a)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
   const post=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':window.csrftoken},body:JSON.stringify(b)}).then(r=>r.json());
@@ -195,7 +196,7 @@
   function labelParticle(id,label){const p=pById(id);if(!p)return;p.label=label;p.color=colorOf[label];p.qc_overridden=false;render();flash('Saving…');post(URLS.label,{particle_pk:id,label}).then(()=>flash('Saved'));}
   function delParticle(id){return post(URLS.del,{particle_pk:id}).then(()=>{particles=particles.filter(p=>p.id!==id);});}
   function delSelected(){if(!sel.size)return;flash('Saving…');const ids=[...sel];Promise.all(ids.map(delParticle)).then(()=>{sel.clear();selInfo();render();flash('Saved');});}
-  function addShape(poly,then){if(poly.length<3)return;flash('Saving…');post(URLS.add,{polygon:poly.map(p=>[Math.round(p[0]),Math.round(p[1])]),label:activeLabel}).then(res=>{if(res&&res.ok){particles.push({id:res.id,particle_id:res.particle_id,label:res.label||activeLabel,color:colorOf[res.label||activeLabel],polygon:poly,origin:'user',uncertain:false,qc_overridden:false,features:{}});render();flash('Saved');if(then)then(res);}});}
+  function addShape(poly,then){if(poly.length<3)return;flash(magicWand?'Snapping…':'Saving…');post(URLS.add,{polygon:poly.map(p=>[Math.round(p[0]),Math.round(p[1])]),label:activeLabel,snap:magicWand}).then(res=>{if(res&&res.ok){particles.push({id:res.id,particle_id:res.particle_id,label:res.label||activeLabel,color:colorOf[res.label||activeLabel],polygon:res.polygon||poly,origin:'user',uncertain:false,qc_overridden:false,features:{}});render();flash(res.snapped?'Snapped ✓':'Saved');if(then)then(res);}});}
   function saveEdit(p){flash('Saving…');post(URLS.edit,{particle_pk:p.id,polygon:p.polygon.map(q=>[Math.round(q[0]),Math.round(q[1])])}).then(()=>flash('Saved'));}
 
   function toggleSel(id,additive){if(!additive){sel.clear();}
@@ -269,7 +270,8 @@
 
   document.querySelectorAll('.tbtn[data-tool]').forEach(b=>b.onclick=()=>selectTool(b.dataset.tool));
   document.querySelectorAll('.tbtn[data-act]').forEach(b=>b.onclick=()=>{const a=b.dataset.act,r=stage.getBoundingClientRect();
-    if(a==='zoomin')zoomAt(r.width/2,r.height/2,1.2);if(a==='fit')fit();if(a==='suspect')nextSuspect();if(a==='finish')finishDraft();if(a==='delete')delSelected();});
+    if(a==='zoomin')zoomAt(r.width/2,r.height/2,1.2);if(a==='fit')fit();if(a==='suspect')nextSuspect();if(a==='finish')finishDraft();if(a==='delete')delSelected();
+    if(a==='wand'){magicWand=!magicWand;b.classList.toggle('active',magicWand);setStatus('Magic wand '+(magicWand?'ON — drawn shapes snap to the grain.':'OFF — shapes are kept as drawn.'));}});
   document.getElementById('bright').oninput=render;
 
   document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
@@ -278,6 +280,7 @@
     if(map[k]){selectTool(map[k]);return;}
     if(k>='1'&&k<=String(labels.length)){const l=labels[+k-1];if(l)setActive(l.value);return;}
     if(k==='f'){nextSuspect();return;}
+    if(k==='w'){magicWand=!magicWand;const b=document.querySelector('.tbtn[data-act=wand]');if(b)b.classList.toggle('active',magicWand);setStatus('Magic wand '+(magicWand?'ON':'OFF'));return;}
     if(e.key==='Enter'){finishDraft();return;}
     if(e.key==='Escape'){draft=null;sel.clear();selInfo();render();return;}
     if(e.key==='Delete'||e.key==='Backspace'){delSelected();return;}
