@@ -29,6 +29,7 @@
           <td><span class="badge">{{ s.get_status_display }}</span></td>
           <td class="small">{{ s.submitted_at|date:"d M Y H:i" }}</td>
           <td>
+            <a class="btn small" href="{% url 'dashboard:submission_detail' pk=s.id %}">View</a>
             <form method="post" action="{% url 'dashboard:admin_rework' pk=s.id %}" onsubmit="return confirm('Send this sample back to the assayer for rework?')" style="display:inline">
               {% csrf_token %}<input type="hidden" name="notes" value="Returned by admin for rework."><button class="btn small" type="submit">Send to rework</button>
             </form>
