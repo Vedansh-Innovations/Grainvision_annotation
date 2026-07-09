@@ -39,10 +39,34 @@ def unavailable_reason():
     return _load_error or _diagnose()
 
 
+_DEFAULT_CKPT_URL = (
+    "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt"
+)
+
+
+def _ensure_checkpoint():
+    """Download the SAM2 checkpoint if it's missing (one-time)."""
+    path = settings.SAM2_CHECKPOINT
+    if os.path.exists(path):
+        return
+    url = os.environ.get("SAM2_CHECKPOINT_URL", _DEFAULT_CKPT_URL)
+    if not url:
+        return
+    try:
+        import urllib.request
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".part"
+        urllib.request.urlretrieve(url, tmp)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
 def available():
     """True if SAM2 is enabled, importable, and the checkpoint exists on disk."""
     if not settings.SAM2_ENABLED:
         return False
+    _ensure_checkpoint()
     if not os.path.exists(settings.SAM2_CHECKPOINT):
         return False
     try:
@@ -107,7 +131,10 @@ def get_mask_generator():
                 settings.SAM2_MODEL_CFG,
                 settings.SAM2_CHECKPOINT,
                 device=device,
-                apply_postprocessing=True,
+                # The optional compiled extension (_C) isn't built on CPU-only
+                # installs; disabling postprocessing avoids the harmless warning
+                # it prints. Masks are unaffected. Stays on for GPU.
+                apply_postprocessing=(device != "cpu"),
             )
             _generator = SAM2AutomaticMaskGenerator(
                 model,

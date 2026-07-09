@@ -16,10 +16,14 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from accounts.permissions import role_required, is_qc_or_admin
-from core.models import AuditLog, AuditAction, Commodity
+from accounts.models import Role
+from django.contrib.auth import get_user_model
+from core.models import AuditLog, AuditAction, Commodity, Mandi
 from annotation.models import (
     Submission, Particle, ParticleLabel, LABEL_COLORS, SubmissionStatus,
 )
+
+User = get_user_model()
 
 
 @login_required
@@ -33,8 +37,14 @@ def queue(request):
 
     commodity = request.GET.get("commodity")
     status = request.GET.get("status")
+    f_assayer = request.GET.get("assayer") or ""
+    f_mandi = request.GET.get("mandi") or ""
     if commodity:
         qs = qs.filter(commodity__code=commodity)
+    if f_assayer:
+        qs = qs.filter(assayer_id=f_assayer)
+    if f_mandi:
+        qs = qs.filter(mandi_id=f_mandi)
     if status:
         qs = qs.filter(status=status)
     else:
@@ -63,6 +73,10 @@ def queue(request):
         "commodities": Commodity.objects.filter(active=True),
         "selected_commodity": commodity or "",
         "selected_status": status or "",
+        "selected_assayer": f_assayer,
+        "selected_mandi": f_mandi,
+        "assayers": User.objects.filter(role=Role.ASSAYER),
+        "mandis": Mandi.objects.filter(active=True),
         "statuses": [(v, l) for v, l in SubmissionStatus.choices if v != SubmissionStatus.DRAFT],
     })
 
