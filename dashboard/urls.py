@@ -10,6 +10,7 @@ urlpatterns = [
     path("users/<int:pk>/edit/", views.user_edit, name="user_edit"),
     path("users/<int:pk>/toggle/", views.user_toggle_active, name="user_toggle_active"),
     path("submissions/", views.submissions, name="submissions"),
+    path("submissions/<uuid:pk>/", views.submission_detail, name="submission_detail"),
     path("submissions/<uuid:pk>/rework/", views.admin_rework, name="admin_rework"),
     path("reference/", views.reference_data, name="reference_data"),
     path("reference/mandi/create/", views.mandi_create, name="mandi_create"),

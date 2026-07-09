@@ -429,3 +429,35 @@ def admin_rework(request, pk):
                     payload={"by": "admin"})
     messages.success(request, f"{sub.short_id} sent back to the assayer for rework.")
     return redirect("dashboard:submissions")
+
+
+# ── Admin: read-only view of one submission (annotated plate + labels) ──
+@login_required
+@role_required(is_admin)
+def submission_detail(request, pk):
+    import json
+    from annotation.models import ParticleLabel, LABEL_COLORS
+    sub = get_object_or_404(
+        Submission.objects.select_related("commodity", "mandi", "assayer", "qc_reviewer"),
+        pk=pk)
+    particles = list(sub.particles.all())
+    counts = {}
+    for p in particles:
+        counts[p.effective_label] = counts.get(p.effective_label, 0) + 1
+    label_rows = [
+        {"label": ParticleLabel(k).label, "color": LABEL_COLORS[ParticleLabel(k)], "n": v}
+        for k, v in sorted(counts.items(), key=lambda kv: -kv[1])
+    ]
+    particles_json = json.dumps([
+        {"polygon": p.polygon,
+         "color": LABEL_COLORS[ParticleLabel(p.effective_label)],
+         "unlabeled": p.effective_label == ParticleLabel.UNLABELED}
+        for p in particles
+    ])
+    return render(request, "dashboard/submission_detail.html", {
+        "sub": sub, "label_rows": label_rows,
+        "particles_json": particles_json,
+        "crop_size": (sub.capture_quality_scores or {}).get("crop_size", [1000, 1000]),
+        "total": len(particles),
+        "unlabeled": sum(1 for p in particles if p.effective_label == ParticleLabel.UNLABELED),
+    })
