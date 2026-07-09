@@ -9,6 +9,10 @@ class Mandi(models.Model):
     district = models.CharField(max_length=120)
     state = models.CharField(max_length=120)
     active = models.BooleanField(default=True)
+    # Which commodities are handled at this mandi (assayers here see these).
+    commodities = models.ManyToManyField(
+        "core.Commodity", blank=True, related_name="mandis"
+    )
 
     class Meta:
         ordering = ["name"]

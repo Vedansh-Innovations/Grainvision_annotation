@@ -66,6 +66,25 @@ class User(AbstractUser):
         parts = (self.get_full_name() or self.username).split()
         return "".join(p[0] for p in parts[:2]).upper() or "U"
 
+    def allowed_commodities(self):
+        """Active commodities this user may work on.
+
+        Assayers see the union of the commodities configured on their mandis.
+        Admins, or assayers with no mandi restriction, see all active ones.
+        """
+        from core.models import Commodity
+        qs = Commodity.objects.filter(active=True)
+        if self.is_platform_admin or not self.mandis.exists():
+            return qs
+        scoped = qs.filter(mandis__in=self.mandis.all()).distinct()
+        return scoped if scoped.exists() else qs
+
+    def allowed_mandis(self):
+        from core.models import Mandi
+        if self.is_platform_admin or not self.mandis.exists():
+            return Mandi.objects.filter(active=True)
+        return self.mandis.filter(active=True)
+
     # ── lockout helpers ───────────────────────────────────────────
     @property
     def is_locked(self):

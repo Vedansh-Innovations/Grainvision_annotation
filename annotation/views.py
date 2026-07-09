@@ -68,8 +68,14 @@ def workspace(request):
 @role_required(is_assayer)
 @require_http_methods(["GET", "POST"])
 def start(request):
-    mandis = request.user.mandis.filter(active=True)
-    commodities = Commodity.objects.filter(active=True)
+    import json as _json
+    mandis = request.user.allowed_mandis()
+    commodities = request.user.allowed_commodities()
+    # mandi -> its commodity ids, so the form can narrow the list per mandi.
+    mandi_commodities = {
+        str(m.id): list(m.commodities.filter(active=True).values_list("id", flat=True))
+        for m in mandis
+    }
 
     if request.method == "POST":
         commodity = commodities.filter(id=request.POST.get("commodity")).first()
@@ -77,7 +83,8 @@ def start(request):
         if not commodity or not mandi:
             messages.error(request, "Select a valid commodity and mandi to begin.")
             return render(request, "annotation/new_sample.html",
-                          {"mandis": mandis, "commodities": commodities})
+                          {"mandis": mandis, "commodities": commodities,
+                           "mandi_commodities": _json.dumps(mandi_commodities)})
 
         next_num = (Submission.objects.filter(assayer=request.user)
                     .order_by("-sample_number").values_list("sample_number", flat=True).first() or 0) + 1
@@ -90,7 +97,8 @@ def start(request):
     if not mandis.exists():
         messages.error(request, "No mandi is assigned to your account yet. Ask an admin to assign one.")
     return render(request, "annotation/new_sample.html",
-                  {"mandis": mandis, "commodities": commodities})
+                  {"mandis": mandis, "commodities": commodities,
+                   "mandi_commodities": _json.dumps(mandi_commodities)})
 
 
 # ── Resume a saved draft at the right step ────────────────────────
@@ -252,15 +260,19 @@ def measurements(request, pk):
 
 # ── STEP 3: Annotation canvas (PRD §7) ────────────────────────────
 def _particles_payload(sub):
-    return [
-        {
-            "id": p.id, "particle_id": p.particle_id, "label": p.label,
-            "color": LABEL_COLORS[ParticleLabel(p.label)],
+    out = []
+    for p in sub.particles.all():
+        eff = p.effective_label
+        out.append({
+            "id": p.id, "particle_id": p.particle_id,
+            "label": eff,                       # show QC's override if present
+            "assayer_label": p.label,
+            "qc_overridden": bool(p.qc_label_override),
+            "color": LABEL_COLORS[ParticleLabel(eff)],
             "polygon": p.polygon, "origin": p.origin, "uncertain": p.uncertain,
             "flagged_by_seg": p.flagged_by_seg, "features": p.features,
-        }
-        for p in sub.particles.all()
-    ]
+        })
+    return out
 
 
 @login_required
@@ -306,7 +318,13 @@ def label_particle(request, pk):
             return HttpResponseBadRequest("Unknown label.")
         p.label = label
         p.uncertain = False
-    p.save(update_fields=["label", "uncertain"])
+    # An assayer's fresh choice supersedes any QC override (keeps them in sync).
+    fields = ["label", "uncertain"]
+    if p.qc_label_override:
+        p.qc_label_override = ""
+        p.qc_overrider = None
+        fields += ["qc_label_override", "qc_overrider"]
+    p.save(update_fields=fields)
     return JsonResponse({
         "ok": True, "label": p.label, "uncertain": p.uncertain,
         "color": LABEL_COLORS[ParticleLabel(p.label)], "remaining": sub.unlabeled_count,
@@ -395,6 +413,11 @@ def pre_submit(request, pk):
         "uncertain": sub.uncertain_count,
         "unlabeled": sub.unlabeled_count,
         "cross_validation": cross_validate(sub),
+        "particles_json": json.dumps([
+            {"polygon": p.polygon, "color": LABEL_COLORS[ParticleLabel(p.effective_label)]}
+            for p in sub.particles.all()
+        ]),
+        "crop_size": sub.capture_quality_scores.get("crop_size", [1000, 1000]),
     })
 
 
