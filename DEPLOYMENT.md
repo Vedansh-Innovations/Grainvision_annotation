@@ -1,166 +1,255 @@
-# GrainVision AI — Data Annotation Platform
-## Deployment Guide
+# GrainVision AI — Deployment Guide (DigitalOcean + Modal)
 
-The platform uses **SAM2 (Segment Anything Model 2)** as its segmentation
-engine. A **CUDA GPU is strongly recommended** — with a GPU, automatic mask
-generation runs in a few seconds per plate at the default dense point grid. SAM2
-also runs on CPU, but the dense grid is slow there; lower `SAM2_POINTS_PER_SIDE`
-to 16–24 for CPU hosts.
+This guide deploys GrainVision as a **split system**:
 
-| Component | Default | Notes |
-|-----------|---------|-------|
-| Web/app   | gunicorn + WhiteNoise | static served by the app, no CDN needed |
-| Database  | SQLite | set `USE_POSTGRES=True` for PostgreSQL |
-| Image storage | local filesystem | set `USE_S3=True` for MinIO/S3 |
-| Segmentation | **SAM2 (required)** | GPU recommended; `SAM2_REQUIRED=True` by default |
+- **DigitalOcean** runs everything on CPU: the Django web app, PostgreSQL
+  database, image storage (Spaces), and the cheap OpenCV fallback engine.
+- **Modal** runs **only** the SAM2 image segmentation on a serverless GPU
+  that scales to zero — you pay per second, nothing while idle.
+
+```
+   Assayer's phone
+        |  (capture plate)
+        v
++-----------------------------+        HTTPS /segment        +--------------------+
+|  DigitalOcean Droplet (CPU) | ---------------------------> |  Modal (GPU, L4)   |
+|  Django + gunicorn + nginx  | <--------------------------- |  SAM2 worker       |
+|                             |        polygons JSON         |  scales to zero    |
+|  |- Managed PostgreSQL  ----+--> (database)                +--------------------+
+|  |- Spaces (S3)  -----------+--> (plate images + exports)
++-----------------------------+
+```
+
+If Modal is ever unreachable, the app automatically falls back to the CPU
+OpenCV engine, so captures never hard-fail.
+
+**You will do four things, in this order:**
+1. Deploy the GPU worker to Modal -> get a URL + token.
+2. Create a PostgreSQL database on DigitalOcean.
+3. Create a Spaces bucket for images on DigitalOcean.
+4. Deploy the Django app on a DigitalOcean Droplet, pointing it at all three.
 
 ---
 
-## 1. Prerequisites
+## 0. Before you start
 
-- Python 3.11 or 3.12
-- A CUDA-capable GPU + recent NVIDIA driver (recommended) — or CPU
-- OS packages for OpenCV (headless): `libgl1`, `libglib2.0-0`
+You need:
+- The project code in a **GitHub repo** (push this folder there).
+- A **DigitalOcean** account (new accounts get $200 credit for 60 days).
+- A **Modal** account (free Starter tier: $30/month credit, no card).
+- A password manager or notepad to hold the secrets you'll generate.
 
+Generate two secrets now and keep them:
 ```bash
-sudo apt-get install -y python3 python3-venv python3-dev libgl1 libglib2.0-0
+# Django secret key (50+ chars)
+python -c "import secrets; print(secrets.token_urlsafe(50))"
+# Worker token (shared between the app and the GPU worker)
+python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
 ---
 
-## 2. Install
+## PART 1 - GPU segmentation worker on Modal
 
+The worker code already exists in `worker/`, and `modal_app.py` wraps it for
+Modal. You only deploy and configure it.
+
+**1.1 Install Modal and log in** (on your laptop):
 ```bash
+pip install modal
+modal token new        # opens a browser to authenticate
+```
+
+**1.2 Store the worker token as a Modal secret** (use the WORKER_TOKEN you
+generated in step 0):
+```bash
+modal secret create grainvision-worker WORKER_TOKEN=<your-worker-token>
+```
+
+**1.3 Deploy** (run from the project root, where `modal_app.py` is):
+```bash
+modal deploy modal_app.py
+```
+Modal builds the image (downloads SAM2 + the model - first build takes a few
+minutes) and prints a public URL, for example:
+```
+https://<your-workspace>--grainvision-seg-fastapi.modal.run
+```
+**Copy that URL.** This is your `SAM2_REMOTE_URL`. Do **not** add a trailing
+slash.
+
+**1.4 Test it:**
+```bash
+curl https://<your-workspace>--grainvision-seg-fastapi.modal.run/health
+# -> {"status":"ok","device":"cuda","cuda_available":true, ... }
+```
+The first call is a cold start (~10-20 s while the container + model load);
+after that it's fast, and it scales back to zero 5 minutes after the last
+request.
+
+**1.5 Sensitivity ("detect the slightest part").**
+It's already set high in `modal_app.py` (`SAM2_POINTS_PER_SIDE=64`, crop
+layers, `SAM2_TILE_SIZE=1024`). To go higher, raise `SAM2_POINTS_PER_SIDE`
+(e.g. 96) and/or `SAM2_CROP_N_LAYERS` to 2, then `modal deploy` again. Higher
+= catches smaller specks but costs a bit more time/money per plate. If plates
+ever hit the 600 s timeout, lower these.
+
+---
+
+## PART 2 - PostgreSQL database (DigitalOcean Managed Database)
+
+**2.1** In the DigitalOcean console: **Create -> Databases -> PostgreSQL** (a
+1 GB / smallest plan is fine to start). Put it in the **same region** as the
+Droplet you'll create in Part 4.
+
+**2.2** When it's ready, open the database -> **Connection details** and note:
+`host`, `port` (usually 25060), `database`, `user`, `password`. Managed
+Postgres **requires SSL**.
+
+**2.3** Add your Droplet to the database's **Trusted Sources** once you have
+it (Part 4) so only it can connect.
+
+You'll put these into the app's `.env` as:
+```
+USE_POSTGRES=True
+POSTGRES_DB=defaultdb
+POSTGRES_USER=doadmin
+POSTGRES_PASSWORD=<from console>
+POSTGRES_HOST=<db-host>.db.ondigitalocean.com
+POSTGRES_PORT=25060
+POSTGRES_SSLMODE=require
+```
+
+---
+
+## PART 3 - Image storage (DigitalOcean Spaces, S3-compatible)
+
+Plate images and dataset exports are stored here instead of on the Droplet
+disk, so they're durable and the disk never fills up.
+
+**3.1** In the console: **Create -> Spaces Object Storage**. Choose a region,
+name the bucket (e.g. `grainvision`), and set file listing to **Restricted**
+(private).
+
+**3.2** Create access keys: **API -> Spaces Keys -> Generate New Key**. Note
+the **access key** and **secret**.
+
+**3.3** Note your Spaces **endpoint**:
+`https://<region>.digitaloceanspaces.com` (e.g. `https://blr1.digitaloceanspaces.com`).
+
+You'll put these into `.env` as:
+```
+USE_S3=True
+S3_ENDPOINT_URL=https://<region>.digitaloceanspaces.com
+S3_ACCESS_KEY=<spaces access key>
+S3_SECRET_KEY=<spaces secret>
+S3_BUCKET=grainvision
+```
+The app serves images through **15-minute pre-signed URLs**, so the bucket
+stays private. No public-read needed.
+
+---
+
+## PART 4 - Web app on a DigitalOcean Droplet (CPU)
+
+**4.1 Create the Droplet:** **Create -> Droplets -> Ubuntu 24.04**. A
+**CPU-Optimized 2 vCPU / 4 GB** (or Basic 2 vCPU / 4 GB) is enough to start.
+Same region as the database. Add your SSH key. Note the Droplet's public IP.
+
+**4.2** Add the Droplet's IP to the **database's Trusted Sources** (Part 2.3).
+
+**4.3 SSH in and install system packages:**
+```bash
+ssh root@<droplet-ip>
+apt update && apt install -y python3-venv python3-pip nginx git
+```
+
+**4.4 Get the code and create a virtualenv:**
+```bash
+cd /opt
+git clone https://github.com/<you>/<your-repo>.git grainvision
 cd grainvision
-python3 -m venv .venv && . .venv/bin/activate
-pip install --upgrade pip setuptools wheel
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+```
+> This installs the CPU/web dependencies. The line
+> `git+https://github.com/facebookresearch/sam2.git@main` in
+> `requirements.txt` is only needed if you ever want SAM2 to run *inside*
+> this box. Since segmentation runs on Modal, you can delete that one line
+> from `requirements.txt` before installing for a much smaller/faster build.
 
-# 2.1 Install PyTorch matching your hardware FIRST (so the correct build is used):
-#   GPU (CUDA 12.1):
-pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
-#   CPU only:
-# pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cpu
+**4.5 Create the `.env` file** (`cp .env.example .env` then edit). Fill in
+everything from Parts 1-3:
+```ini
+# Core
+DEBUG=False
+SECRET_KEY=<your django secret key>
+ALLOWED_HOSTS=<your-domain-or-droplet-ip>
+CSRF_TRUSTED_ORIGINS=https://<your-domain>
 
-# 2.2 Install the application + SAM2 (and remaining deps).
-#     --no-build-isolation makes SAM2 build against the torch you just installed
-#     instead of pulling its own default (CUDA) torch.
-pip install --no-build-isolation -r requirements.txt
+# Database (Part 2)
+USE_POSTGRES=True
+POSTGRES_DB=defaultdb
+POSTGRES_USER=doadmin
+POSTGRES_PASSWORD=<db password>
+POSTGRES_HOST=<db-host>.db.ondigitalocean.com
+POSTGRES_PORT=25060
+POSTGRES_SSLMODE=require
+
+# Image storage (Part 3)
+USE_S3=True
+S3_ENDPOINT_URL=https://<region>.digitaloceanspaces.com
+S3_ACCESS_KEY=<spaces access key>
+S3_SECRET_KEY=<spaces secret>
+S3_BUCKET=grainvision
+
+# Segmentation -> Modal GPU worker (Part 1). This is the whole "GPU only for
+# segmentation" wiring: the app offloads segmentation and does nothing else
+# on GPU. Leave SAM2_ENABLED=False so it never tries to load SAM2 locally.
+SAM2_ENABLED=False
+SAM2_REQUIRED=False
+SAM2_REMOTE_URL=https://<your-workspace>--grainvision-seg-fastapi.modal.run
+SAM2_REMOTE_TOKEN=<your worker token>
+SAM2_REMOTE_TIMEOUT=180
 ```
 
-If SAM2's build complains about a CUDA extension on a CPU-only box, prefix the
-install with `SAM2_BUILD_CUDA=0`:
-
-```bash
-SAM2_BUILD_CUDA=0 pip install --no-build-isolation -r requirements.txt
-```
-
-Verify the stack imports:
-
-```bash
-python -c "import torch, sam2, cv2, django, bcrypt; print('torch', torch.__version__, '| cuda', torch.cuda.is_available())"
-```
-
----
-
-## 3. Download the SAM2 checkpoint
-
-The platform defaults to the **hiera-small** checkpoint:
-
-```bash
-mkdir -p ml_models
-curl -L -o ml_models/sam2.1_hiera_small.pt \
-  https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt
-```
-
-The matching config (`configs/sam2.1/sam2.1_hiera_s.yaml`) ships inside the
-installed `sam2` package, so no extra config file is needed. To use a different
-size, download that checkpoint and set `SAM2_CHECKPOINT` + `SAM2_MODEL_CFG`
-accordingly (e.g. `sam2.1_hiera_large.pt` with `.../sam2.1_hiera_l.yaml`).
-
----
-
-## 4. Configure
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-- `SECRET_KEY` — `python -c "import secrets; print(secrets.token_urlsafe(50))"`
-- `DEBUG=False`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS` for production.
-- `SAM2_DEVICE=cuda` on a GPU host; `SAM2_DEVICE=cpu` otherwise.
-- On CPU, set `SAM2_POINTS_PER_SIDE=16` (or `24`) to keep latency reasonable.
-- Leave `SAM2_REQUIRED=True` so a misconfiguration fails loudly rather than
-  silently degrading to the classical engine. (Set `False` only if you
-  intentionally want the OpenCV watershed engine to stand in.)
-
----
-
-## 5. Database, static, seed
-
+**4.6 Initialise the app:**
 ```bash
 python manage.py migrate
 python manage.py collectstatic --noinput
-python manage.py createsuperuser        # or: python manage.py seed_demo
+python manage.py ensure_admin        # creates the first admin (see its output)
+python manage.py seed_demo           # OPTIONAL: demo mandis/users to explore
 ```
 
-`seed_demo` loads four mandis, four commodities (Wheat, Rice, Chickpea, Lentil —
-each targeting 500 approved samples) and one account per role. **Rotate the
-printed demo passwords immediately** outside a throwaway environment.
-
----
-
-## 6. Run
-
-### Development
-
-```bash
-python manage.py runserver 0.0.0.0:8000
-```
-
-### Production (gunicorn + WhiteNoise)
-
-```bash
-gunicorn grainvision.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 180
-```
-
-The model is loaded lazily on the first segmentation and cached per worker
-process. With multiple gunicorn workers, each holds its own copy — size
-`--workers` to your GPU memory. `--timeout 180` gives headroom for the first
-(model-loading) request.
-
-### systemd
-
+**4.7 Run it with gunicorn under systemd.** Create
 `/etc/systemd/system/grainvision.service`:
-
 ```ini
 [Unit]
-Description=GrainVision AI Annotation Platform
+Description=GrainVision (gunicorn)
 After=network.target
 
 [Service]
-User=grainvision
 WorkingDirectory=/opt/grainvision
 EnvironmentFile=/opt/grainvision/.env
-ExecStart=/opt/grainvision/.venv/bin/gunicorn grainvision.wsgi:application \
-    --bind 127.0.0.1:8000 --workers 2 --timeout 180
+ExecStart=/opt/grainvision/.venv/bin/gunicorn grainvision.wsgi:application --workers 3 --timeout 120 --bind 127.0.0.1:8000
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
 ```
+Then:
+```bash
+systemctl enable --now grainvision
+systemctl status grainvision      # should be "active (running)"
+```
 
-### nginx (TLS 1.3, PRD §13.2)
-
+**4.8 Put nginx in front.** Create `/etc/nginx/sites-available/grainvision`:
 ```nginx
 server {
-    listen 443 ssl;
-    server_name grainvision.example.com;
-    ssl_certificate     /etc/ssl/grainvision/fullchain.pem;
-    ssl_certificate_key /etc/ssl/grainvision/privkey.pem;
-    ssl_protocols TLSv1.3 TLSv1.2;
-    client_max_body_size 25M;            # 12MP JPEG uploads
+    listen 80;
+    server_name <your-domain-or-ip>;
+    client_max_body_size 25M;          # plate photos
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -170,124 +259,106 @@ server {
     }
 }
 ```
-
-Static and media are served by WhiteNoise from the app; no extra nginx blocks
-are required.
-
----
-
-## 7. PostgreSQL (optional)
-
 ```bash
-# .env
-USE_POSTGRES=True
-POSTGRES_DB=grainvision
-POSTGRES_USER=grainvision
-POSTGRES_PASSWORD=<strong-secret>
-POSTGRES_HOST=127.0.0.1
-POSTGRES_PORT=5432
-POSTGRES_SSLMODE=require        # PRD §13.2: SSL-only
+ln -s /etc/nginx/sites-available/grainvision /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+nginx -t && systemctl reload nginx
 ```
 
-Then re-run `migrate`, `collectstatic`, `createsuperuser`.
-
----
-
-## 8. MinIO / S3 image storage (optional)
-
-PRD §13.2: AES-256 at rest, 15-minute pre-signed URLs.
-
+**4.9 Add HTTPS** (required - the capture screen uses the phone camera, which
+browsers only allow over HTTPS). Point a domain's A-record at the Droplet IP,
+then:
 ```bash
-# .env
-USE_S3=True
-S3_ENDPOINT_URL=http://minio.internal:9000
-S3_ACCESS_KEY=grainvision
-S3_SECRET_KEY=<strong-secret>
-S3_BUCKET=grainvision
+apt install -y certbot python3-certbot-nginx
+certbot --nginx -d <your-domain>
 ```
-
-Raw originals are written once and never overwritten (PRD §5.3 / §11.3).
+Certbot rewrites the nginx config for TLS. After it runs, set
+`CSRF_TRUSTED_ORIGINS=https://<your-domain>` in `.env` and
+`systemctl restart grainvision`.
 
 ---
 
-## 9. Verify the segmentation engine
+## PART 5 - Verify the whole chain
 
-After deployment, confirm SAM2 is the live engine:
+1. Open `https://<your-domain>` and sign in as the admin from step 4.6.
+2. As admin, create a **Mandi** and tick its **commodities**
+   (Mandis & commodities), and create an **Assayer** user assigned to that
+   mandi (Users).
+3. Sign in as the assayer on a **phone**, start a new sample, and **capture**
+   a plate.
+4. Confirm segmentation ran on the GPU: watch Modal's dashboard - you'll see
+   a container spin up for the capture, then scale to zero ~5 min later.
+5. Check the plate image appears in your **Spaces** bucket.
 
-```bash
-python -c "import django,os; os.environ['DJANGO_SETTINGS_MODULE']='grainvision.settings'; \
-django.setup(); from ml import sam2_loader; \
-print('available:', sam2_loader.available()); \
-print('generator:', type(sam2_loader.get_mask_generator()).__name__)"
-```
-
-Or hit the authenticated health endpoint, which reports
-`engine`, `device`, `points_per_side`, `sam2_available` and any `load_error`:
-
-```
-GET /api/ml/health/
-```
-
-If `SAM2_REQUIRED=True` and SAM2 cannot load, a capture attempt raises a clear
-`RuntimeError` naming the exact cause (missing checkpoint, torch not importable,
-etc.) instead of silently producing lower-quality results.
+If a capture ever returns few/blobby grains, that's the **CPU fallback** -
+it means the app couldn't reach Modal. Re-check `SAM2_REMOTE_URL`,
+`SAM2_REMOTE_TOKEN`, and that the Modal app is deployed.
 
 ---
 
-## 10. Post-deploy checklist
+## PART 6 - Costs & tuning
 
-```bash
-python manage.py check --deploy
-python manage.py migrate --check
-```
+- **Modal:** billed per second, scales to zero. At high sensitivity on an L4,
+  a plate runs in the tens of seconds ~ a fraction of a cent. The **$30/month
+  free credit** covers roughly a few thousand plates/month - likely all of
+  your volume. Keep it warm during work hours by raising `scaledown_window`
+  in `modal_app.py` if you want to avoid cold starts.
+- **DigitalOcean:** Droplet (~$24/mo for 2 vCPU/4 GB), Managed Postgres
+  (~$15/mo smallest), Spaces (~$5/mo). All CPU - cheap and steady.
+- **Do NOT** run the GPU on a DigitalOcean **GPU Droplet** for this: those
+  bill 24/7 even when powered off, so an idle-most-of-the-day segmentation
+  GPU there is far more expensive than Modal's scale-to-zero.
 
-In the browser:
-
-- [ ] Each role logs in and lands on the right home.
-- [ ] Measurements screen blocks "Proceed" until five valid weights with defect
-      sum <= total; a 0.00 field triggers the confirm modal.
-- [ ] Capture is auto-only (no manual shutter); after capture the canvas shows
-      **SAM2** polygons (check `/api/ml/health/` shows `engine: sam2`).
-- [ ] Labeling all particles enables "Review & submit"; submitting with any
-      unlabeled particle is blocked.
-- [ ] QC queue is oldest-first with warning badges; review approves/reworks/
-      rejects; per-particle override is logged (`/admin/audit/`).
-- [ ] Admin dashboard shows metric cards, the <10% minority flag, commodity
-      progress and the assayer table.
-- [ ] Dataset export downloads a schema-valid COCO JSON.
-- [ ] 5 failed logins trigger a 30-minute lockout.
-
-A scripted end-to-end check is included:
-
-```bash
-DEBUG=True DJANGO_SETTINGS_MODULE=grainvision.settings python smoke.py
-```
-
-(`smoke.py` exercises the whole assayer -> QC -> admin flow. To run it quickly on
-a CPU box without waiting on SAM2, set `SAM2_ENABLED=False SAM2_REQUIRED=False`
-so the flow uses the fast classical engine; the HTTP plumbing it verifies is
-identical either way. `verify_sam2.py` separately confirms the SAM2 path itself.)
+**Sensitivity dial** (in `modal_app.py`, then `modal deploy`):
+`SAM2_POINTS_PER_SIDE` up and `SAM2_CROP_N_LAYERS`=2 catch smaller specks but
+cost more time per plate; `SAM2_TILE_SIZE` splits big plates so nothing is
+missed. Lower them if you hit the timeout or want cheaper/faster captures.
 
 ---
 
-## 11. Troubleshooting
+## Environment variable reference
 
-| Symptom | Cause / fix |
-|---------|-------------|
-| `pip` pulls a huge CUDA torch while building SAM2 | Install torch first, then `pip install --no-build-isolation -r requirements.txt`. |
-| SAM2 build errors about a CUDA extension on CPU | Prefix with `SAM2_BUILD_CUDA=0`. |
-| `RuntimeError: SAM2 ... not available: Checkpoint not found` | Download the checkpoint to `SAM2_CHECKPOINT` (step 3). |
-| `RuntimeError: SAM2 ... 'sam2' is not importable` | The `sam2` package didn't install; re-run step 2.2. |
-| Segmentation very slow | You're on CPU. Use a GPU (`SAM2_DEVICE=cuda`) or lower `SAM2_POINTS_PER_SIDE`. |
-| `ImportError: libGL.so.1` | Install `libgl1` and `libglib2.0-0`. |
-| `CSRF verification failed` | Add the browse origin to `CSRF_TRUSTED_ORIGINS`. |
+| Variable | Where | Purpose |
+|---|---|---|
+| `SECRET_KEY` | app | Django crypto key |
+| `DEBUG` | app | `False` in production |
+| `ALLOWED_HOSTS` | app | your domain / IP |
+| `CSRF_TRUSTED_ORIGINS` | app | `https://<domain>` |
+| `USE_POSTGRES` + `POSTGRES_*` | app | Managed Postgres connection |
+| `USE_S3` + `S3_*` | app | Spaces bucket for images/exports |
+| `SAM2_ENABLED=False` | app | never load SAM2 locally |
+| `SAM2_REMOTE_URL` | app | Modal worker URL (no trailing slash) |
+| `SAM2_REMOTE_TOKEN` | app | must equal the worker's `WORKER_TOKEN` |
+| `SAM2_REMOTE_TIMEOUT` | app | seconds to wait for the GPU (e.g. 180) |
+| `WORKER_TOKEN` | Modal secret | shared auth token for `/segment` |
+| `SAM2_POINTS_PER_SIDE`, `SAM2_CROP_N_LAYERS`, `SAM2_TILE_SIZE` | Modal (`modal_app.py`) | segmentation sensitivity |
 
 ---
 
-## 12. Backups & retention (PRD §11.3)
+## Troubleshooting
 
-- **DB:** SQLite — copy `db.sqlite3`; PostgreSQL — scheduled `pg_dump`.
-- **Images:** local FS — back up `media/`; MinIO — bucket replication. Originals
-  are immutable and retained indefinitely; rejected-submission images are kept
-  but excluded from exports.
-- **Audit log:** append-only; retain >= 1 year.
+- **Camera won't open on the capture screen** -> the site must be **HTTPS**
+  (Part 4.9). Over plain HTTP, browsers block the camera.
+- **`DisallowedHost` error** -> add your domain/IP to `ALLOWED_HOSTS`,
+  restart gunicorn.
+- **CSRF 403 on login** -> set `CSRF_TRUSTED_ORIGINS=https://<domain>`.
+- **DB connection refused** -> add the Droplet IP to the database's Trusted
+  Sources, and confirm `POSTGRES_SSLMODE=require`.
+- **Images 403 / not showing** -> check the Spaces keys and `S3_BUCKET`; the
+  app uses pre-signed URLs, so the bucket should stay private.
+- **Every capture is blobby (CPU fallback)** -> the app can't reach Modal:
+  verify `SAM2_REMOTE_URL`/`SAM2_REMOTE_TOKEN` and `modal deploy` status.
+- **First capture of the day is slow** -> Modal cold start; raise
+  `scaledown_window` in `modal_app.py` to keep a warm container during work
+  hours.
+
+---
+
+### Alternative: DigitalOcean App Platform (instead of a Droplet)
+
+If you'd rather not manage a server: push the repo, then **Create -> Apps**,
+point it at the repo, set the **run command** to
+`gunicorn grainvision.wsgi:application --workers 3 --timeout 120`, add all the
+`.env` values as **App-Level Environment Variables**, and add a **pre-deploy
+Job** running `python manage.py migrate`. Use the same Managed Postgres,
+Spaces, and Modal settings. App Platform handles TLS automatically.
