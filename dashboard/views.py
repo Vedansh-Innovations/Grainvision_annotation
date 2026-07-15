@@ -431,6 +431,24 @@ def admin_rework(request, pk):
     return redirect("dashboard:submissions")
 
 
+@login_required
+@role_required(is_admin)
+@require_POST
+def admin_reject(request, pk):
+    sub = get_object_or_404(Submission, pk=pk, submitted_at__isnull=False)
+    sub.status = SubmissionStatus.QC_REJECTED
+    reason = request.POST.get("notes", "")[:2000] or "Rejected by admin."
+    sub.rework_instructions = reason
+    sub.qc_reviewer = request.user
+    sub.reviewed_at = timezone.now()
+    sub.save(update_fields=["status", "rework_instructions", "qc_reviewer", "reviewed_at"])
+    AuditLog.record(user=request.user, action=AuditAction.QC_REJECT,
+                    entity_type="submission", entity_id=sub.id,
+                    payload={"by": "admin", "reason": reason})
+    messages.success(request, f"{sub.short_id} rejected.")
+    return redirect("dashboard:submissions")
+
+
 # ── Admin: read-only view of one submission (annotated plate + labels) ──
 @login_required
 @role_required(is_admin)
@@ -460,4 +478,12 @@ def submission_detail(request, pk):
         "crop_size": (sub.capture_quality_scores or {}).get("crop_size", [1000, 1000]),
         "total": len(particles),
         "unlabeled": sum(1 for p in particles if p.effective_label == ParticleLabel.UNLABELED),
+        "measurements": [
+            ("Total sample weight", sub.total_weight_g, None),
+            ("Foreign matter", sub.foreign_matter_g, sub.foreign_pct),
+            ("Fungal / infected", sub.fungal_grains_g, sub.fungal_pct),
+            ("Immature grains", sub.immature_grains_g, sub.immature_pct),
+            ("Organic matter", sub.organic_matter_g, sub.organic_pct),
+        ],
+        "quality": sub.capture_quality_scores or {},
     })
