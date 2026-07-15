@@ -12,6 +12,7 @@ urlpatterns = [
     path("submissions/", views.submissions, name="submissions"),
     path("submissions/<uuid:pk>/", views.submission_detail, name="submission_detail"),
     path("submissions/<uuid:pk>/rework/", views.admin_rework, name="admin_rework"),
+    path("submissions/<uuid:pk>/reject/", views.admin_reject, name="admin_reject"),
     path("reference/", views.reference_data, name="reference_data"),
     path("reference/mandi/create/", views.mandi_create, name="mandi_create"),
     path("reference/mandi/<int:pk>/commodities/", views.mandi_set_commodities, name="mandi_set_commodities"),
