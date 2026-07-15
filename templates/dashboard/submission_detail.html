@@ -38,11 +38,35 @@
       {% empty %}<p class="muted small">No labeled grains.</p>{% endfor %}
     </div>
     <div class="card">
-      <form method="post" action="{% url 'dashboard:admin_rework' pk=sub.id %}" onsubmit="return confirm('Send this sample back to the assayer for rework?')">
+      <div class="card-title">Measurements (parameters)</div>
+      <table class="data">
+        {% for name, grams, pct in measurements %}
+        <tr>
+          <td class="muted">{{ name }}</td>
+          <td class="right">{% if grams is not None %}{{ grams }} g{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="right small muted">{% if pct is not None %}{{ pct }}%{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      <p class="muted small mt">Capture: {% if quality.ring_cover %}plate cover {{ quality.ring_cover }}{% endif %}{% if quality.mean_luminance %} · luminance {{ quality.mean_luminance|floatformat:0 }}{% endif %}{% if quality.glare %} · glare flagged{% endif %}</p>
+    </div>
+    <div class="card">
+      <div class="card-title">Admin decision</div>
+      {% if sub.status == 'qc_rejected' %}
+        <div class="banner banner-error small">This submission is already rejected.</div>
+      {% elif sub.status == 'rework_requested' %}
+        <div class="banner banner-orange small">Already returned for rework.</div>
+      {% endif %}
+      <form method="post" action="{% url 'dashboard:admin_reject' pk=sub.id %}" onsubmit="return confirm('Reject this submission? It will be marked QC Rejected.')">
         {% csrf_token %}
-        <label class="field">Send back to assayer (optional note)</label>
-        <input name="notes" placeholder="What needs fixing?">
-        <button class="btn btn-danger mt" type="submit" style="width:100%">Send to rework</button>
+        <label class="field">Reason (recorded with the decision)</label>
+        <textarea name="notes" rows="2" placeholder="Why is this being rejected?"></textarea>
+        <button class="btn btn-danger mt" type="submit" style="width:100%">Reject submission</button>
+      </form>
+      <form method="post" action="{% url 'dashboard:admin_rework' pk=sub.id %}" onsubmit="return confirm('Send this sample back to the assayer for rework?')" class="mt">
+        {% csrf_token %}
+        <input name="notes" placeholder="What needs fixing? (optional)">
+        <button class="btn mt" type="submit" style="width:100%">Send back for rework</button>
       </form>
     </div>
   </div>
