@@ -79,7 +79,7 @@
 
   <div class="sidecol">
     <div class="card">
-      <div class="card-title">Class <span class="muted small">(keys 1–5)</span></div>
+      <div class="card-title">Class <span class="muted small">(keys 1–{{ labels|length }})</span></div>
       <div id="classList"></div>
     </div>
     <div class="card">
@@ -90,7 +90,7 @@
       <a class="btn btn-primary mt" style="width:100%;text-align:center" href="{% url 'annotation:pre_submit' pk=submission.id %}">Review &amp; submit →</a>
     </div>
     <div class="card"><div class="card-title">Selected</div><div class="small" id="selInfo">Nothing selected.</div></div>
-    <div class="card small muted desk-shortcuts"><strong>Shortcuts:</strong> V select · G label · D redraw · P/R/O/T shapes · H pan · 1–5 class · F next suspect · Del delete · Esc cancel · click-drag empty = box multi-select (max 10)</div>
+    <div class="card small muted desk-shortcuts"><strong>Shortcuts:</strong> V select · G label · D redraw · P/R/O/T shapes · H pan · 1–{{ labels|length }} class · F next suspect · Del delete · Esc cancel · click-drag empty = box multi-select (max 10)</div>
   </div>
 </div>
 
@@ -278,7 +278,7 @@
     if(e.code==='Space'){spaceDown=true;stage.style.cursor='grab';return;}
     const k=e.key.toLowerCase(), map={v:'select',g:'grain',d:'redraw',p:'polygon',r:'rect',o:'ellipse',t:'point',h:'pan'};
     if(map[k]){selectTool(map[k]);return;}
-    if(k>='1'&&k<=String(labels.length)){const l=labels[+k-1];if(l)setActive(l.value);return;}
+    if(/^[1-9]$/.test(k)&&+k<=labels.length){const l=labels[+k-1];if(l)setActive(l.value);return;}
     if(k==='f'){nextSuspect();return;}
     if(k==='w'){magicWand=!magicWand;const b=document.querySelector('.tbtn[data-act=wand]');if(b)b.classList.toggle('active',magicWand);setStatus('Magic wand '+(magicWand?'ON':'OFF'));return;}
     if(e.key==='Enter'){finishDraft();return;}

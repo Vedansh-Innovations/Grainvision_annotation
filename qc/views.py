@@ -82,13 +82,15 @@ def queue(request):
 
 
 def _review_payload(sub):
+    colors = sub.commodity.class_color_map()
+    fallback = LABEL_COLORS[ParticleLabel.UNLABELED]
     return [
         {
             "id": p.id, "particle_id": p.particle_id,
             "label": p.effective_label,
             "assayer_label": p.label,
             "overridden": bool(p.qc_label_override),
-            "color": LABEL_COLORS[ParticleLabel(p.effective_label)],
+            "color": colors.get(p.effective_label, fallback),
             "polygon": p.polygon, "uncertain": p.uncertain,
             "flagged_by_seg": p.flagged_by_seg, "features": p.features,
         }
@@ -105,15 +107,14 @@ def review(request, pk):
     )
     dist = sub.label_distribution()
     total = sub.particle_count or 1
+    classes = sub.commodity.annotation_classes()
     label_rows = [
-        {"label": l.label, "value": l.value, "color": LABEL_COLORS[l],
-         "count": dist[l.value], "pct": round(dist[l.value] / total * 100, 1)}
-        for l in ParticleLabel if l != ParticleLabel.UNLABELED
+        {"label": c["label"], "value": c["value"], "color": c["color"],
+         "count": dist.get(c["value"], 0),
+         "pct": round(dist.get(c["value"], 0) / total * 100, 1)}
+        for c in classes
     ]
-    labels = [
-        {"value": l.value, "label": l.label, "color": LABEL_COLORS[l]}
-        for l in ParticleLabel if l != ParticleLabel.UNLABELED
-    ]
+    labels = classes
     return render(request, "qc/review.html", {
         "submission": sub,
         "particles_json": json.dumps(_review_payload(sub)),
@@ -134,8 +135,8 @@ def override_label(request, pk):
     data = json.loads(request.body or "{}")
     p = get_object_or_404(Particle, id=data.get("particle_pk"), submission=sub)
     new_label = data.get("label")
-    if new_label not in ParticleLabel.values:
-        return HttpResponseBadRequest("Unknown label.")
+    if not sub.commodity.is_valid_label(new_label):
+        return HttpResponseBadRequest("Unknown label for this commodity.")
 
     old = p.effective_label
     p.qc_label_override = new_label
@@ -148,7 +149,8 @@ def override_label(request, pk):
         payload={"submission": str(sub.id), "from": old, "to": new_label},
     )
     return JsonResponse({"ok": True, "label": new_label,
-                         "color": LABEL_COLORS[ParticleLabel(new_label)]})
+                         "color": sub.commodity.class_color_map().get(
+                             new_label, LABEL_COLORS[ParticleLabel.UNLABELED])})
 
 
 def _decide(request, sub, status, action, message):

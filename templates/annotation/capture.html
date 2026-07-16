@@ -10,37 +10,39 @@
   <div class="card">
     <div class="card-title">Auto-capture viewfinder</div>
     <div style="position:relative;background:#11151c;border-radius:var(--radius);overflow:hidden">
-      <video id="video" autoplay playsinline muted style="width:100%;display:block"></video>
+      <video id="video" autoplay playsinline muted style="width:100%;max-height:48vh;display:block;margin:0 auto"></video>
       <canvas id="overlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
       <div id="noCam" style="display:none;padding:40px;text-align:center;color:#9fb0c4">
         Camera unavailable on this device.
       </div>
     </div>
 
-    <div class="flex gap mt" style="justify-content:center">
-      <span class="badge" id="pill-align"><span class="dot" style="background:#888"></span> Alignment</span>
+    <div class="flex gap mt" style="justify-content:center;flex-wrap:wrap">
+      <span class="badge" id="pill-align"><span class="dot" style="background:#888"></span> Framing</span>
+      <span class="badge" id="pill-tilt"><span class="dot" style="background:#888"></span> Level</span>
       <span class="badge" id="pill-light"><span class="dot" style="background:#888"></span> Lighting</span>
       <span class="badge" id="pill-sharp"><span class="dot" style="background:#888"></span> Sharpness</span>
     </div>
 
     <div id="countdownWrap" class="mt" style="text-align:center;display:none">
       <div class="muted small">Hold steady — auto-capturing in</div>
-      <div id="countdown" style="font-size:34px;font-weight:700;color:var(--ok)">2.0s</div>
+      <div id="countdown" style="font-size:34px;font-weight:700;color:var(--ok)">1.5s</div>
       <div class="progress-bar" style="max-width:240px;margin:0 auto"><div class="fill" id="cdfill" style="background:var(--ok);width:0%"></div></div>
     </div>
+    <div class="banner banner-amber mt small" style="display:none" id="uploadStatus">Uploading &amp; segmenting…</div>
     <p class="muted small mt" style="text-align:center">Auto-capture only — no manual shutter (PRD §5.1).</p>
   </div>
 
   <div class="card">
     <div class="card-title">Live validation</div>
     <div id="liveStatus" class="small mono">
-      <div data-k="plate">Plate detected · <span>waiting…</span></div>
+      <div data-k="plate">Plate fills guide · <span>waiting…</span></div>
+      <div data-k="center">Centred · <span>waiting…</span></div>
+      <div data-k="tilt">Tilt · <span>waiting…</span></div>
       <div data-k="light">Lighting · <span>waiting…</span></div>
       <div data-k="sharp">Sharpness · <span>waiting…</span></div>
-      <div data-k="tilt">Tilt · <span>waiting…</span></div>
     </div>
     <div class="banner banner-info mt small" id="hint">Center the plate within the circular guide.</div>
-    <div class="banner banner-amber mt small" style="display:none" id="uploadStatus">Uploading & segmenting…</div>
   </div>
 </div>
 
@@ -56,25 +58,32 @@
   const submitUrl = "{% url 'annotation:capture_submit' submission.id %}";
 
   const pills = { align: document.getElementById('pill-align'),
+                  tilt:  document.getElementById('pill-tilt'),
                   light: document.getElementById('pill-light'),
                   sharp: document.getElementById('pill-sharp') };
   const live = {};
   document.querySelectorAll('#liveStatus [data-k]').forEach(d => live[d.dataset.k] = d.querySelector('span'));
 
   let stableSince = null, capturing = false, cdStart = null, lastLog = 0, wasArmed = false;
-  const HOLD_MS = 500;        // conditions hold before the countdown arms (relaxed)
-  const COUNTDOWN_MS = 1000;  // steady-hold countdown (relaxed)
+  const HOLD_MS = 900;        // all checks must hold this long before the countdown arms
+  const COUNTDOWN_MS = 1500;  // steady-hold countdown — a lucky frame can't sneak through
 
-  // ── Auto-capture thresholds (relaxed for normal, everyday conditions) ──
-  // Tune these if capture is too eager / too reluctant on your device.
+  // ── Auto-capture thresholds ──────────────────────────────────────
+  // Each key maps 1:1 to a field in the [auto-capture] console log, so you
+  // can calibrate against real devices: frame a good plate, read the logged
+  // metrics, and set each threshold with ~15–20% margin beyond what good
+  // plates actually produce.
   const THRESH = {
-    centerMin:      70,   // min brightness of plate centre (was 110)
-    centerContrast: 3,    // centre must be this much brighter than corners (was 12)
-    meanMin:        45,   // overall luminance lower bound (was 100)
-    meanMax:        250,  // overall luminance upper bound (was 220)
-    stdMax:         95,   // luminance spread tolerance (was 48)
-    glareMax:       250,  // blown-out pixel tolerance (was 60)
-    sharpMin:       2.5,  // edge-energy / focus threshold (was 9)
+    ringCoverMin:      0.82, // plate must cover ≥82% of sample points on the guide ring
+    quadSpreadMax:     28,   // max brightness gap between the 4 quadrants (off-centre catch)
+    balanceMax:        18,   // max L/R or T/B brightness asymmetry (tilt proxy)
+    centerMin:         70,   // plate centre must be at least this bright
+    centerContrastMin: 12,   // centre must beat the outside-the-guide area by this much
+    meanMin:           60,   // overall luminance lower bound (inside guide)
+    meanMax:           235,  // overall luminance upper bound
+    stdMax:            80,   // luminance spread tolerance
+    glarePctMax:       1.5,  // % of guide pixels allowed to be blown out (>245)
+    sharpMin:          3.5,  // edge-energy / focus threshold
   };
 
   function setPill(el, ok, text){
@@ -95,36 +104,75 @@
   }
 
   function analyseFrame(){
-    if (!video.videoWidth) return null;
-    wctx.drawImage(video, 0, 0, work.width, work.height);
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return null;
+    // Analyse the CENTRE SQUARE of the frame (side = min dimension), which is
+    // exactly the region the on-screen circular guide sits in. This keeps the
+    // analysis geometry circular instead of squashing the frame.
+    const s = Math.min(vw, vh);
+    wctx.drawImage(video, (vw-s)/2, (vh-s)/2, s, s, 0, 0, work.width, work.height);
     const W=work.width, H=work.height;
     const data = wctx.getImageData(0,0,W,H).data;
+    const cx=W/2, cy=H/2, R=Math.min(W,H)*0.42;   // guide circle in analysis space
 
-    // center disc sampling for luminance
+    const lumAt = (x,y) => {
+      const i=((y|0)*W+(x|0))*4;
+      return 0.299*data[i]+0.587*data[i+1]+0.114*data[i+2];
+    };
+
     let sum=0, sumSq=0, n=0, edge=0, glare=0;
-    let centerLum=0, cn=0, cornerLum=0, kn=0;
-    const cx=W/2, cy=H/2, R=Math.min(W,H)*0.42;
+    let centerLum=0, cn=0, outerLum=0, on=0;
+    const quad=[0,0,0,0], quadN=[0,0,0,0];      // TL,TR,BL,BR within guide
+    let lSum=0,lN=0,rSum=0,rN=0,tSum=0,tN=0,bSum=0,bN=0;
     let prev=0;
     for (let y=0;y<H;y++){
       for (let x=0;x<W;x++){
-        const i=(y*W+x)*4;
-        const lum = 0.299*data[i]+0.587*data[i+1]+0.114*data[i+2];
+        const lum = lumAt(x,y);
         const d = Math.hypot(x-cx,y-cy);
         if (d < R){
           sum+=lum; sumSq+=lum*lum; n++;
           if (lum>245) glare++;
+          if (x>0) edge += Math.abs(lum - prev);
           if (d < R*0.4){ centerLum+=lum; cn++; }
-          if (x>0){ edge += Math.abs(lum - prev); }
-        } else if (d > R*1.05){ cornerLum+=lum; kn++; }
+          const qi = (y<cy?0:2) + (x<cx?0:1);
+          quad[qi]+=lum; quadN[qi]++;
+          if (x<cx){ lSum+=lum; lN++; } else { rSum+=lum; rN++; }
+          if (y<cy){ tSum+=lum; tN++; } else { bSum+=lum; bN++; }
+        } else if (d > R*1.12){ outerLum+=lum; on++; }
         prev=lum;
       }
     }
     const mean = n? sum/n : 0;
-    const std = n? Math.sqrt(sumSq/n - mean*mean) : 0;
+    const std = n? Math.sqrt(Math.max(0, sumSq/n - mean*mean)) : 0;
     const sharp = n? edge/n : 0;
+    const glarePct = n? glare/n*100 : 0;
     const centerMean = cn? centerLum/cn : 0;
-    const cornerMean = kn? cornerLum/kn : 1;
-    return { mean, std, sharp, glare, centerMean, cornerMean };
+    const outerMean = on? outerLum/on : 255;
+
+    // Ring coverage: sample two rings just inside the guide edge. If the plate
+    // truly fills the guide, these points sit on the plate (bright); if it's
+    // small or off-centre, some fall on background (dark) and coverage drops.
+    const cutLum = Math.max(45, (centerMean + outerMean) / 2);
+    let ringHit=0, ringTot=0;
+    for (const rr of [R*0.78, R*0.90]){
+      for (let a=0;a<60;a++){
+        const th = a/60*Math.PI*2;
+        const x = cx + rr*Math.cos(th), y = cy + rr*Math.sin(th);
+        if (x<0||y<0||x>=W||y>=H) continue;
+        ringTot++;
+        if (lumAt(x,y) > cutLum) ringHit++;
+      }
+    }
+    const ringCover = ringTot? ringHit/ringTot : 0;
+
+    const qm = quad.map((q,i)=> quadN[i]? q/quadN[i] : 0);
+    const quadSpread = Math.max(...qm) - Math.min(...qm);
+    const lr = Math.abs((lN?lSum/lN:0) - (rN?rSum/rN:0));
+    const tb = Math.abs((tN?tSum/tN:0) - (bN?bSum/bN:0));
+    const balance = Math.max(lr, tb);
+
+    return { mean, std, sharp, glarePct, centerMean, outerMean,
+             ringCover, quadSpread, balance };
   }
 
   function tick(){
@@ -132,46 +180,58 @@
     const f = analyseFrame();
     if (!f){ requestAnimationFrame(tick); return; }
 
-    // Alignment: a brighter plate roughly fills the centre guide.
-    const alignOK = f.centerMean > THRESH.centerMin && (f.centerMean - f.cornerMean) > THRESH.centerContrast;
-    // Lighting: within a wide luminance band, not too noisy, not blown out.
-    const lightOK = f.mean >= THRESH.meanMin && f.mean <= THRESH.meanMax && f.std < THRESH.stdMax && f.glare < THRESH.glareMax;
+    const contrast = f.centerMean - f.outerMean;
+    // Framing: plate bright, brighter than surroundings, filling the ring, even quadrants.
+    const alignOK = f.centerMean > THRESH.centerMin
+                 && contrast > THRESH.centerContrastMin
+                 && f.ringCover >= THRESH.ringCoverMin
+                 && f.quadSpread <= THRESH.quadSpreadMax;
+    // Tilt proxy: a level, face-on plate is left/right and top/bottom symmetric.
+    const tiltOK = f.balance <= THRESH.balanceMax;
+    // Lighting: within band, not noisy, not blown out.
+    const lightOK = f.mean >= THRESH.meanMin && f.mean <= THRESH.meanMax
+                 && f.std < THRESH.stdMax && f.glarePct < THRESH.glarePctMax;
     // Sharpness: enough edge energy to be in focus.
     const sharpOK = f.sharp > THRESH.sharpMin;
-    const tiltOK = true; // ellipse eccentricity proxy held by guide alignment
 
-    // ── Diagnostics: log every ~500ms so you can see which check fails ──
+    // ── Diagnostics: full metrics every ~500ms for real-device calibration ──
     if (performance.now() - lastLog > 500) {
       lastLog = performance.now();
       const failing = [];
       if (!alignOK) failing.push('align');
+      if (!tiltOK) failing.push('tilt');
       if (!lightOK) failing.push('light');
       if (!sharpOK) failing.push('sharp');
       console.log('[auto-capture]', {
         metrics: {
-          centerMean: +f.centerMean.toFixed(1), cornerMean: +f.cornerMean.toFixed(1),
-          mean: +f.mean.toFixed(1), std: +f.std.toFixed(1),
-          sharp: +f.sharp.toFixed(2), glare: f.glare,
+          ringCover: +f.ringCover.toFixed(2), quadSpread: +f.quadSpread.toFixed(1),
+          balance: +f.balance.toFixed(1), mean: +f.mean.toFixed(0),
+          std: +f.std.toFixed(0), sharp: +f.sharp.toFixed(1),
+          glare: +f.glarePct.toFixed(2),
+          centerMean: +f.centerMean.toFixed(0), outerMean: +f.outerMean.toFixed(0),
         },
         checks: {
-          align: alignOK + ` (centerMean ${f.centerMean.toFixed(0)}>${THRESH.centerMin} && contrast ${(f.centerMean-f.cornerMean).toFixed(0)}>${THRESH.centerContrast})`,
-          light: lightOK + ` (mean ${f.mean.toFixed(0)} in [${THRESH.meanMin},${THRESH.meanMax}], std ${f.std.toFixed(0)}<${THRESH.stdMax}, glare ${f.glare}<${THRESH.glareMax})`,
+          align: alignOK + ` (ringCover ${f.ringCover.toFixed(2)}>=${THRESH.ringCoverMin}, quadSpread ${f.quadSpread.toFixed(0)}<=${THRESH.quadSpreadMax}, centerMean ${f.centerMean.toFixed(0)}>${THRESH.centerMin}, contrast ${contrast.toFixed(0)}>${THRESH.centerContrastMin})`,
+          tilt:  tiltOK + ` (balance ${f.balance.toFixed(0)}<=${THRESH.balanceMax})`,
+          light: lightOK + ` (mean ${f.mean.toFixed(0)} in [${THRESH.meanMin},${THRESH.meanMax}], std ${f.std.toFixed(0)}<${THRESH.stdMax}, glare ${f.glarePct.toFixed(1)}%<${THRESH.glarePctMax}%)`,
           sharp: sharpOK + ` (edge ${f.sharp.toFixed(1)}>${THRESH.sharpMin})`,
         },
-        result: (alignOK && lightOK && sharpOK) ? 'ALL OK — arming' : ('FAILING: ' + failing.join(', ')),
+        result: (alignOK && tiltOK && lightOK && sharpOK) ? 'ALL OK — arming' : ('FAILING: ' + failing.join(', ')),
       });
     }
 
-    setPill(pills.align, alignOK, alignOK ? 'Aligned' : 'Center plate');
+    setPill(pills.align, alignOK, alignOK ? 'Framed' : (f.ringCover < THRESH.ringCoverMin ? 'Fill the guide' : 'Center plate'));
+    setPill(pills.tilt, tiltOK, tiltOK ? 'Level' : 'Hold level');
     setPill(pills.light, lightOK, lightOK ? 'Light OK' : 'Adjust light');
     setPill(pills.sharp, sharpOK, sharpOK ? 'Sharp' : 'Hold still');
 
-    live.plate.textContent = alignOK ? 'circle within guide · center offset ok' : 'searching for plate…';
-    live.light.textContent = 'mean luminance ' + f.mean.toFixed(0) + ' · σ ' + f.std.toFixed(0) + (f.glare>=60?' · glare':' · no glare');
+    live.plate.textContent = 'ring cover ' + Math.round(f.ringCover*100) + '% (need ≥' + Math.round(THRESH.ringCoverMin*100) + '%)';
+    live.center.textContent = 'quadrant spread ' + f.quadSpread.toFixed(0) + ' (max ' + THRESH.quadSpreadMax + ')';
+    live.tilt.textContent = 'balance ' + f.balance.toFixed(0) + ' (max ' + THRESH.balanceMax + ')' + (tiltOK ? ' · level' : ' · tilt detected');
+    live.light.textContent = 'mean ' + f.mean.toFixed(0) + ' · σ ' + f.std.toFixed(0) + ' · glare ' + f.glarePct.toFixed(1) + '%';
     live.sharp.textContent = 'edge energy ' + f.sharp.toFixed(1) + (sharpOK?' > threshold':' < threshold');
-    live.tilt.textContent = tiltOK ? 'camera perpendicular' : 'tilt detected';
 
-    const allOK = alignOK && lightOK && sharpOK && tiltOK;
+    const allOK = alignOK && tiltOK && lightOK && sharpOK;
     drawGuide(allOK);
 
     const cd = document.getElementById('countdownWrap');
@@ -191,6 +251,10 @@
     } else {
       stableSince = null; cdStart = null; wasArmed = false;
       cd.style.display='none'; hint.style.display='block';
+      hint.textContent = !alignOK ? 'Move so the plate fills and is centred in the circle.'
+                       : !tiltOK ? 'Hold the phone flat — directly above the plate.'
+                       : !lightOK ? 'Adjust lighting — avoid shadows and glare.'
+                       : 'Hold still to focus.';
     }
     requestAnimationFrame(tick);
   }
@@ -200,13 +264,23 @@
   async function capture(scores){
     capturing = true;
     document.getElementById('uploadStatus').style.display='block';
+    // Crop to the guide: a centred square at 86% of the frame's short side
+    // (guide diameter is 84%), so countertop/background is dropped at source.
+    const vw = video.videoWidth || 1200, vh = video.videoHeight || 1200;
+    const side = Math.floor(Math.min(vw, vh) * 0.86);
+    const sx = Math.floor((vw - side) / 2), sy = Math.floor((vh - side) / 2);
     const full = document.createElement('canvas');
-    full.width = video.videoWidth || 1200; full.height = video.videoHeight || 1200;
-    full.getContext('2d').drawImage(video, 0, 0, full.width, full.height);
+    full.width = side; full.height = side;
+    full.getContext('2d').drawImage(video, sx, sy, side, side, 0, 0, side, side);
     await upload(await blobOf(full), {
-      capture_mode:'auto', mean_luminance: scores? scores.mean : null,
-      glare: scores ? scores.glare >= 60 : false,
-      exif: { captured:true, color_space:'sRGB', width:full.width, height:full.height }
+      capture_mode:'auto',
+      mean_luminance: scores ? +scores.mean.toFixed(1) : null,
+      glare: scores ? scores.glarePct >= THRESH.glarePctMax : false,
+      ring_cover: scores ? +scores.ringCover.toFixed(2) : null,
+      quad_spread: scores ? +scores.quadSpread.toFixed(1) : null,
+      balance: scores ? +scores.balance.toFixed(1) : null,
+      sharpness: scores ? +scores.sharp.toFixed(1) : null,
+      exif: { captured:true, color_space:'sRGB', width:side, height:side, cropped_to_guide:true }
     });
   }
 

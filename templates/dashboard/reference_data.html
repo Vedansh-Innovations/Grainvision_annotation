@@ -97,6 +97,33 @@
                 </form>
               </td>
             </tr>
+            <tr class="{% if not r.obj.active %}dimmed{% endif %}">
+              <td colspan="6" style="padding:6px 12px 14px;border-top:none">
+                <div class="small muted" style="margin-bottom:6px">Annotation classes <span class="muted">(5 built-in + commodity-specific extras · colors auto-assigned)</span></div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+                  {% for cls in r.obj.annotation_classes %}
+                    <span class="badge" style="display:inline-flex;align-items:center;gap:6px">
+                      <span class="dot" style="background:{{ cls.color }}"></span>{{ cls.label }}
+                      {% if cls.locked %}
+                        <span class="muted small" title="Built-in class — on every commodity">🔒</span>
+                      {% else %}
+                        <form method="post" action="{% url 'dashboard:commodity_remove_class' pk=r.obj.id %}" style="display:inline"
+                              onsubmit="return confirm('Remove class “{{ cls.label }}” from {{ r.obj.name }}? Blocked if any particle uses it.')">
+                          {% csrf_token %}
+                          <input type="hidden" name="class_value" value="{{ cls.value }}">
+                          <button type="submit" class="muted small" style="background:none;border:none;cursor:pointer;padding:0" title="Remove class">✕</button>
+                        </form>
+                      {% endif %}
+                    </span>
+                  {% endfor %}
+                  <form method="post" action="{% url 'dashboard:commodity_add_class' pk=r.obj.id %}" style="display:inline-flex;gap:6px;align-items:center">
+                    {% csrf_token %}
+                    <input name="class_name" placeholder="New class name…" maxlength="60" style="width:150px" required>
+                    <button class="btn small" type="submit">+ Add class</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
           {% empty %}
             <tr><td colspan="6" class="muted" style="text-align:center;padding:22px">No commodities yet — add one above.</td></tr>
           {% endfor %}
