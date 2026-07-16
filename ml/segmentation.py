@@ -19,28 +19,39 @@ logger = logging.getLogger(__name__)
 
 
 # ── Stage 1: plate isolation ──────────────────────────────────────
-def isolate_plate(bgr):
+def isolate_plate(bgr, pre_cropped=False):
     """
     Detect the circular ceramic plate and return:
       (crop_bgr, plate_mask, (cx, cy, r), dark_fraction)
     Background outside the plate is set to white for contrast uniformity.
+
+    pre_cropped=True means the client already cropped the frame to the
+    circular capture guide (86% centred square; guide inscribed in it). In
+    that case the plate rim is largely OUTSIDE the image, so Hough circle
+    detection has no rim to find — it would either fall back small or lock
+    onto an interior circle (grain-pile edge, plate pattern) and crop away
+    real content. Skip detection entirely and take the inscribed circle,
+    which fully contains everything the assayer saw inside the guide.
     """
     h, w = bgr.shape[:2]
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    gray_blur = cv2.medianBlur(gray, 7)
 
-    min_r = int(min(h, w) * 0.30)
-    max_r = int(min(h, w) * 0.52)
-    circles = cv2.HoughCircles(
-        gray_blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=min(h, w),
-        param1=120, param2=40, minRadius=min_r, maxRadius=max_r,
-    )
-
-    if circles is not None:
-        cx, cy, r = np.round(circles[0, 0]).astype(int)
+    if pre_cropped:
+        cx, cy, r = w // 2, h // 2, int(min(h, w) * 0.5)
+        circles = None
     else:
-        # Fallback: assume a centered plate filling most of the frame.
-        cx, cy, r = w // 2, h // 2, int(min(h, w) * 0.47)
+        gray_blur = cv2.medianBlur(gray, 7)
+        min_r = int(min(h, w) * 0.30)
+        max_r = int(min(h, w) * 0.52)
+        circles = cv2.HoughCircles(
+            gray_blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=min(h, w),
+            param1=120, param2=40, minRadius=min_r, maxRadius=max_r,
+        )
+        if circles is not None:
+            cx, cy, r = np.round(circles[0, 0]).astype(int)
+        else:
+            # Fallback: assume a centered plate filling most of the frame.
+            cx, cy, r = w // 2, h // 2, int(min(h, w) * 0.47)
 
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.circle(mask, (int(cx), int(cy)), int(r), 255, -1)
@@ -262,7 +273,7 @@ def _mask_to_polygon_and_features(seg, crop_bgr):
 
 
 # ── Public entry point ────────────────────────────────────────────
-def segment_image(bgr, commodity):
+def segment_image(bgr, commodity, pre_cropped=False):
     """
     Run the full pipeline on a decoded BGR image for a given commodity.
 
@@ -277,7 +288,7 @@ def segment_image(bgr, commodity):
         "merge_flagged_count": int,
       }
     """
-    crop, crop_mask, (cx, cy, r), dark_fraction = isolate_plate(bgr)
+    crop, crop_mask, (cx, cy, r), dark_fraction = isolate_plate(bgr, pre_cropped=pre_cropped)
     ch, cw = crop.shape[:2]
 
     min_area = commodity.min_particle_area_px
