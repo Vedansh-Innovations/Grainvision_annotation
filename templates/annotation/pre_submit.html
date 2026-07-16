@@ -22,7 +22,7 @@
     const svg=document.getElementById('review-svg'); svg.setAttribute('viewBox','0 0 '+W+' '+H);
     const NS='http://www.w3.org/2000/svg';
     const img=document.createElementNS(NS,'image');
-    img.setAttributeNS('http://www.w3.org/1999/xlink','href',"{{ submission.crop_image.url }}");
+    img.setAttributeNS('http://www.w3.org/1999/xlink','href',"{{ submission.crop_image.url|safe }}");
     img.setAttribute('href',"{{ submission.crop_image.url }}");
     img.setAttribute('width',W);img.setAttribute('height',H); svg.appendChild(img);
     const sw=Math.max(1,W/900); let nUn=0;
