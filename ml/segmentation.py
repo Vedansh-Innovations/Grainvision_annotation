@@ -359,13 +359,6 @@ def segment_image(bgr, commodity, pre_cropped=False):
     # Stable ordering: top-to-bottom, left-to-right.
     particles.sort(key=lambda p: (p["polygon"][0][1], p["polygon"][0][0]))
 
-    # Tag likely foreign matter (colour/size/shape outliers) as a hint.
-    try:
-        from .foreign import flag_foreign_suspects
-        flag_foreign_suspects(particles)
-    except Exception:
-        pass
-
     return {
         "crop_bgr": crop,
         "plate": {"cx": cx, "cy": cy, "r": r},
