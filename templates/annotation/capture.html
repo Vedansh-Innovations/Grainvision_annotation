@@ -18,6 +18,7 @@
     </div>
 
     <div class="flex gap mt" style="justify-content:center;flex-wrap:wrap">
+      <button type="button" class="badge" id="torchBtn" style="display:none;cursor:pointer;border:none">💡 Flash: ON</button>
       <span class="badge" id="pill-align"><span class="dot" style="background:#888"></span> Framing</span>
       <span class="badge" id="pill-tilt"><span class="dot" style="background:#888"></span> Level</span>
       <span class="badge" id="pill-light"><span class="dot" style="background:#888"></span> Lighting</span>
@@ -42,7 +43,7 @@
       <div data-k="light">Lighting · <span>waiting…</span></div>
       <div data-k="sharp">Sharpness · <span>waiting…</span></div>
     </div>
-    <div class="banner banner-info mt small" id="hint">Center the plate within the circular guide.</div>
+    <div class="banner banner-info mt small" id="hint">Position the plate so its edge sits just outside the circle.</div>
   </div>
 </div>
 
@@ -74,16 +75,20 @@
   // metrics, and set each threshold with ~15–20% margin beyond what good
   // plates actually produce.
   const THRESH = {
-    ringCoverMin:      0.82, // plate must cover ≥82% of sample points on the guide ring
-    quadSpreadMax:     28,   // max brightness gap between the 4 quadrants (off-centre catch)
-    balanceMax:        18,   // max L/R or T/B brightness asymmetry (tilt proxy)
-    centerMin:         70,   // plate centre must be at least this bright
-    centerContrastMin: 12,   // centre must beat the outside-the-guide area by this much
-    meanMin:           60,   // overall luminance lower bound (inside guide)
-    meanMax:           235,  // overall luminance upper bound
-    stdMax:            80,   // luminance spread tolerance
-    glarePctMax:       1.5,  // % of guide pixels allowed to be blown out (>245)
-    sharpMin:          3.5,  // edge-energy / focus threshold
+    // Framing is judged on the PLATE MARGIN RING — sample points at 86% and
+    // 94% of the guide radius, which land on the clean plate surface between
+    // the grain pile and the rim when the plate edge sits just outside the
+    // circle. Calibrated against a real field capture (peanut plate, terrazzo
+    // countertop: plate ≈170 lum, grains ≈96, countertop ≈75).
+    ringMedianMin:  115,  // ring points must be plate-bright (countertop ≈75, grains ≈96)
+    ringCoverMin:   0.75, // ≥75% of ring points must be plate surface
+    quadSpreadMax:  30,   // ring quadrant brightness gap (off-centre catch)
+    balanceMax:     26,   // ring L/R & T/B asymmetry (tilt / uneven-light proxy)
+    meanMin:        60,   // overall luminance lower bound (inside guide)
+    meanMax:        235,  // overall luminance upper bound
+    stdMax:         85,   // luminance spread tolerance (grain piles are high-contrast)
+    glarePctMax:    1.5,  // % of guide pixels allowed to be blown out (>245)
+    sharpMin:       3.0,  // edge-energy / focus threshold
   };
 
   function setPill(el, ok, text){
@@ -96,7 +101,13 @@
     const w = overlay.width = overlay.clientWidth;
     const h = overlay.height = overlay.clientHeight;
     octx.clearRect(0,0,w,h);
-    const cx=w/2, cy=h/2, r=Math.min(w,h)*0.42;
+    // The video letterboxes/pillarboxes inside its element (object-fit contain),
+    // so size the guide to the DISPLAYED VIDEO CONTENT — this keeps the drawn
+    // circle identical to the region analyseFrame() actually measures.
+    const vw = video.videoWidth || w, vh = video.videoHeight || h;
+    const sc = Math.min(w/vw, h/vh);
+    const dw = vw*sc, dh = vh*sc;
+    const cx=w/2, cy=h/2, r=Math.min(dw,dh)*0.42;
     octx.strokeStyle = ok ? '#2ECC71' : 'rgba(255,255,255,.6)';
     octx.lineWidth = ok ? 5 : 3;
     octx.setLineDash(ok ? [] : [10,8]);
@@ -121,9 +132,6 @@
     };
 
     let sum=0, sumSq=0, n=0, edge=0, glare=0;
-    let centerLum=0, cn=0, outerLum=0, on=0;
-    const quad=[0,0,0,0], quadN=[0,0,0,0];      // TL,TR,BL,BR within guide
-    let lSum=0,lN=0,rSum=0,rN=0,tSum=0,tN=0,bSum=0,bN=0;
     let prev=0;
     for (let y=0;y<H;y++){
       for (let x=0;x<W;x++){
@@ -133,12 +141,7 @@
           sum+=lum; sumSq+=lum*lum; n++;
           if (lum>245) glare++;
           if (x>0) edge += Math.abs(lum - prev);
-          if (d < R*0.4){ centerLum+=lum; cn++; }
-          const qi = (y<cy?0:2) + (x<cx?0:1);
-          quad[qi]+=lum; quadN[qi]++;
-          if (x<cx){ lSum+=lum; lN++; } else { rSum+=lum; rN++; }
-          if (y<cy){ tSum+=lum; tN++; } else { bSum+=lum; bN++; }
-        } else if (d > R*1.12){ outerLum+=lum; on++; }
+        }
         prev=lum;
       }
     }
@@ -146,33 +149,36 @@
     const std = n? Math.sqrt(Math.max(0, sumSq/n - mean*mean)) : 0;
     const sharp = n? edge/n : 0;
     const glarePct = n? glare/n*100 : 0;
-    const centerMean = cn? centerLum/cn : 0;
-    const outerMean = on? outerLum/on : 255;
 
-    // Ring coverage: sample two rings just inside the guide edge. If the plate
-    // truly fills the guide, these points sit on the plate (bright); if it's
-    // small or off-centre, some fall on background (dark) and coverage drops.
-    const cutLum = Math.max(45, (centerMean + outerMean) / 2);
-    let ringHit=0, ringTot=0;
-    for (const rr of [R*0.78, R*0.90]){
-      for (let a=0;a<60;a++){
-        const th = a/60*Math.PI*2;
-        const x = cx + rr*Math.cos(th), y = cy + rr*Math.sin(th);
-        if (x<0||y<0||x>=W||y>=H) continue;
-        ringTot++;
-        if (lumAt(x,y) > cutLum) ringHit++;
+    // Plate-margin ring: points at 0.86R and 0.94R. With the plate rim just
+    // outside the guide these sit on clean plate surface (bright, uniform).
+    // Off-centre / too far → countertop on the ring (dark). Too close →
+    // grain pile on the ring (dark + uneven). Tilt → L/R or T/B asymmetric.
+    const pts=[]; const quads={L:[],R:[],T:[],B:[]};
+    for (const rf of [0.86, 0.94]){
+      for (let a=0;a<72;a++){
+        const th = a/72*Math.PI*2;
+        const x = cx + R*rf*Math.cos(th), y = cy + R*rf*Math.sin(th);
+        let v = 0;
+        if (x>=0 && y>=0 && x<W && y<H){
+          v = lumAt(x,y);
+          (x<cx ? quads.L : quads.R).push(v);
+          (y<cy ? quads.T : quads.B).push(v);
+        }
+        pts.push(v);
       }
     }
-    const ringCover = ringTot? ringHit/ringTot : 0;
+    const sorted = pts.slice().sort((a,b)=>a-b);
+    const ringMedian = sorted[Math.floor(sorted.length/2)];
+    const p90 = sorted[Math.floor(sorted.length*0.9)];
+    const cut = Math.max(95, 0.62*p90);
+    const ringCover = pts.filter(v=>v>cut).length / pts.length;
+    const qmean = k => quads[k].length ? quads[k].reduce((a,b)=>a+b,0)/quads[k].length : 0;
+    const qL=qmean('L'), qR=qmean('R'), qT=qmean('T'), qB=qmean('B');
+    const quadSpread = Math.max(qL,qR,qT,qB) - Math.min(qL,qR,qT,qB);
+    const balance = Math.max(Math.abs(qL-qR), Math.abs(qT-qB));
 
-    const qm = quad.map((q,i)=> quadN[i]? q/quadN[i] : 0);
-    const quadSpread = Math.max(...qm) - Math.min(...qm);
-    const lr = Math.abs((lN?lSum/lN:0) - (rN?rSum/rN:0));
-    const tb = Math.abs((tN?tSum/tN:0) - (bN?bSum/bN:0));
-    const balance = Math.max(lr, tb);
-
-    return { mean, std, sharp, glarePct, centerMean, outerMean,
-             ringCover, quadSpread, balance };
+    return { mean, std, sharp, glarePct, ringMedian, ringCover, quadSpread, balance };
   }
 
   function tick(){
@@ -180,13 +186,11 @@
     const f = analyseFrame();
     if (!f){ requestAnimationFrame(tick); return; }
 
-    const contrast = f.centerMean - f.outerMean;
-    // Framing: plate bright, brighter than surroundings, filling the ring, even quadrants.
-    const alignOK = f.centerMean > THRESH.centerMin
-                 && contrast > THRESH.centerContrastMin
+    // Framing: margin ring must be plate-bright, mostly covered, evenly lit.
+    const alignOK = f.ringMedian >= THRESH.ringMedianMin
                  && f.ringCover >= THRESH.ringCoverMin
                  && f.quadSpread <= THRESH.quadSpreadMax;
-    // Tilt proxy: a level, face-on plate is left/right and top/bottom symmetric.
+    // Tilt proxy: a level, face-on plate has a L/R and T/B symmetric margin ring.
     const tiltOK = f.balance <= THRESH.balanceMax;
     // Lighting: within band, not noisy, not blown out.
     const lightOK = f.mean >= THRESH.meanMin && f.mean <= THRESH.meanMax
@@ -204,14 +208,13 @@
       if (!sharpOK) failing.push('sharp');
       console.log('[auto-capture]', {
         metrics: {
-          ringCover: +f.ringCover.toFixed(2), quadSpread: +f.quadSpread.toFixed(1),
-          balance: +f.balance.toFixed(1), mean: +f.mean.toFixed(0),
-          std: +f.std.toFixed(0), sharp: +f.sharp.toFixed(1),
-          glare: +f.glarePct.toFixed(2),
-          centerMean: +f.centerMean.toFixed(0), outerMean: +f.outerMean.toFixed(0),
+          ringMedian: +f.ringMedian.toFixed(0), ringCover: +f.ringCover.toFixed(2),
+          quadSpread: +f.quadSpread.toFixed(1), balance: +f.balance.toFixed(1),
+          mean: +f.mean.toFixed(0), std: +f.std.toFixed(0),
+          sharp: +f.sharp.toFixed(1), glare: +f.glarePct.toFixed(2),
         },
         checks: {
-          align: alignOK + ` (ringCover ${f.ringCover.toFixed(2)}>=${THRESH.ringCoverMin}, quadSpread ${f.quadSpread.toFixed(0)}<=${THRESH.quadSpreadMax}, centerMean ${f.centerMean.toFixed(0)}>${THRESH.centerMin}, contrast ${contrast.toFixed(0)}>${THRESH.centerContrastMin})`,
+          align: alignOK + ` (ringMedian ${f.ringMedian.toFixed(0)}>=${THRESH.ringMedianMin}, ringCover ${f.ringCover.toFixed(2)}>=${THRESH.ringCoverMin}, quadSpread ${f.quadSpread.toFixed(0)}<=${THRESH.quadSpreadMax})`,
           tilt:  tiltOK + ` (balance ${f.balance.toFixed(0)}<=${THRESH.balanceMax})`,
           light: lightOK + ` (mean ${f.mean.toFixed(0)} in [${THRESH.meanMin},${THRESH.meanMax}], std ${f.std.toFixed(0)}<${THRESH.stdMax}, glare ${f.glarePct.toFixed(1)}%<${THRESH.glarePctMax}%)`,
           sharp: sharpOK + ` (edge ${f.sharp.toFixed(1)}>${THRESH.sharpMin})`,
@@ -225,7 +228,7 @@
     setPill(pills.light, lightOK, lightOK ? 'Light OK' : 'Adjust light');
     setPill(pills.sharp, sharpOK, sharpOK ? 'Sharp' : 'Hold still');
 
-    live.plate.textContent = 'ring cover ' + Math.round(f.ringCover*100) + '% (need ≥' + Math.round(THRESH.ringCoverMin*100) + '%)';
+    live.plate.textContent = 'ring ' + f.ringMedian.toFixed(0) + ' lum · cover ' + Math.round(f.ringCover*100) + '% (need ≥' + Math.round(THRESH.ringCoverMin*100) + '%)';
     live.center.textContent = 'quadrant spread ' + f.quadSpread.toFixed(0) + ' (max ' + THRESH.quadSpreadMax + ')';
     live.tilt.textContent = 'balance ' + f.balance.toFixed(0) + ' (max ' + THRESH.balanceMax + ')' + (tiltOK ? ' · level' : ' · tilt detected');
     live.light.textContent = 'mean ' + f.mean.toFixed(0) + ' · σ ' + f.std.toFixed(0) + ' · glare ' + f.glarePct.toFixed(1) + '%';
@@ -251,7 +254,9 @@
     } else {
       stableSince = null; cdStart = null; wasArmed = false;
       cd.style.display='none'; hint.style.display='block';
-      hint.textContent = !alignOK ? 'Move so the plate fills and is centred in the circle.'
+      hint.textContent = !alignOK ? (f.ringMedian < THRESH.ringMedianMin && f.mean > 90
+                            ? 'Move back until the plate edge sits just outside the circle.'
+                            : 'Centre the plate — its edge should sit just outside the circle.')
                        : !tiltOK ? 'Hold the phone flat — directly above the plate.'
                        : !lightOK ? 'Adjust lighting — avoid shadows and glare.'
                        : 'Hold still to focus.';
@@ -277,6 +282,8 @@
       mean_luminance: scores ? +scores.mean.toFixed(1) : null,
       glare: scores ? scores.glarePct >= THRESH.glarePctMax : false,
       ring_cover: scores ? +scores.ringCover.toFixed(2) : null,
+      ring_median: scores ? +scores.ringMedian.toFixed(0) : null,
+      torch: torchOn,
       quad_spread: scores ? +scores.quadSpread.toFixed(1) : null,
       balance: scores ? +scores.balance.toFixed(1) : null,
       sharpness: scores ? +scores.sharp.toFixed(1) : null,
@@ -294,8 +301,34 @@
            document.getElementById('uploadStatus').textContent='Upload failed: ' + (await res.text()); capturing=false; }
   }
 
+  // ── Torch (camera LED): auto-on to kill shadows; toggleable ──────
+  // Supported on Android Chrome; iOS Safari exposes no torch control, so the
+  // button stays hidden there and everything else works as before.
+  let torchTrack = null, torchOn = false;
+  const torchBtn = document.getElementById('torchBtn');
+  async function setTorch(on){
+    if (!torchTrack) return;
+    try {
+      await torchTrack.applyConstraints({ advanced: [{ torch: on }] });
+      torchOn = on;
+      torchBtn.textContent = '💡 Flash: ' + (on ? 'ON' : 'OFF');
+      torchBtn.className = 'badge ' + (on ? 'badge-approved' : '');
+    } catch (e) { console.log('[auto-capture] torch not controllable:', e.message); }
+  }
+  torchBtn.addEventListener('click', () => setTorch(!torchOn));
+
   navigator.mediaDevices?.getUserMedia({ video: { facingMode:'environment', width:{ideal:1920} } })
-    .then(stream => { video.srcObject = stream; requestAnimationFrame(tick); })
+    .then(stream => {
+      video.srcObject = stream;
+      const track = stream.getVideoTracks()[0];
+      const caps = (track.getCapabilities ? track.getCapabilities() : {}) || {};
+      if (caps.torch){
+        torchTrack = track;
+        torchBtn.style.display = 'inline-flex';
+        setTorch(true);                       // auto-on to even out shadows
+      }
+      requestAnimationFrame(tick);
+    })
     .catch(() => { document.getElementById('noCam').style.display='block'; video.style.display='none';
                    document.getElementById('hint').innerHTML='No camera detected. Open this page on a device with a rear camera to scan a plate.'; });
 })();
