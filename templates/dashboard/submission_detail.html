@@ -81,8 +81,8 @@
   const svg=document.getElementById('det-svg'); svg.setAttribute('viewBox','0 0 '+W+' '+H);
   const NS='http://www.w3.org/2000/svg';
   const img=document.createElementNS(NS,'image');
-  img.setAttributeNS('http://www.w3.org/1999/xlink','href',"{{ sub.crop_image.url }}");
-  img.setAttribute('href',"{{ sub.crop_image.url }}"); img.setAttribute('width',W); img.setAttribute('height',H); svg.appendChild(img);
+  img.setAttributeNS('http://www.w3.org/1999/xlink','href',"{{ sub.crop_image.url|safe }}");
+  img.setAttribute('href',"{{ sub.crop_image.url|safe }}"); img.setAttribute('width',W); img.setAttribute('height',H); svg.appendChild(img);
   const sw=Math.max(1,W/900);
   ps.filter(p=>!p.unlabeled).forEach(p=>{const pl=document.createElementNS(NS,'polygon');pl.setAttribute('points',p.polygon.map(q=>q.join(',')).join(' '));pl.setAttribute('fill','none');pl.setAttribute('stroke',p.color);pl.setAttribute('stroke-width',sw);svg.appendChild(pl);});
   ps.filter(p=>p.unlabeled).forEach(p=>{const pl=document.createElementNS(NS,'polygon');pl.setAttribute('points',p.polygon.map(q=>q.join(',')).join(' '));pl.setAttribute('fill','rgba(241,196,15,.3)');pl.setAttribute('stroke','#F1C40F');pl.setAttribute('stroke-width',sw*2);pl.setAttribute('stroke-dasharray',(sw*4)+','+(sw*3));svg.appendChild(pl);});
