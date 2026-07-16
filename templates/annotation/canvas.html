@@ -101,7 +101,7 @@
 {% block scripts %}
 <script>
 (function(){
-  const CROP={{ crop_size|safe }}, cropImg="{{ submission.crop_image.url }}";
+  const CROP={{ crop_size|safe }}, cropImg="{{ submission.crop_image.url|safe }}";
   const URLS={label:"{% url 'annotation:label_particle' pk=submission.id %}",add:"{% url 'annotation:add_particle' pk=submission.id %}",edit:"{% url 'annotation:edit_particle' pk=submission.id %}",del:"{% url 'annotation:delete_particle' pk=submission.id %}"};
   const W=CROP[0],H=CROP[1];
   let particles=JSON.parse(document.getElementById('particles-data').textContent);
