@@ -1,0 +1,92 @@
+{% extends 'partials/base.html' %}
+{% block title %}Submission #{{ sub.sample_number }}{% endblock %}
+{% block sidebar %}{% include 'partials/sidebar.html' with active='submissions' %}{% endblock %}
+{% block crumb %}<span class="crumb">/ <a href="{% url 'dashboard:submissions' %}">All submissions</a> / #{{ sub.sample_number }}</span>{% endblock %}
+{% block content %}
+<div class="flex-between">
+  <h2 style="margin:0">#{{ sub.sample_number }} · {{ sub.commodity.name }} <span class="muted small">{{ sub.short_id }}</span></h2>
+  <span class="badge">{{ sub.get_status_display }}</span>
+</div>
+
+<div class="grid grid-2 mt" style="align-items:start">
+  <div class="card">
+    <div class="card-title">Annotated plate</div>
+    {% if sub.crop_image %}
+    <div style="background:#0b1020;border-radius:10px;overflow:hidden">
+      <svg id="det-svg" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block"></svg>
+    </div>
+    <p class="muted small mt" id="det-cap">{{ total }} grains outlined.</p>
+    {% else %}<p class="muted">No plate image on file.</p>{% endif %}
+  </div>
+
+  <div>
+    <div class="card">
+      <div class="card-title">Details</div>
+      <table class="data">
+        <tr><td class="muted">Assayer</td><td>{% if sub.assayer %}{{ sub.assayer.get_full_name|default:sub.assayer.username }}{% else %}—{% endif %}</td></tr>
+        <tr><td class="muted">Mandi</td><td>{{ sub.mandi.name|default:"—" }}</td></tr>
+        <tr><td class="muted">Commodity</td><td>{{ sub.commodity.name }}</td></tr>
+        <tr><td class="muted">QC reviewer</td><td>{% if sub.qc_reviewer %}{{ sub.qc_reviewer.get_full_name|default:sub.qc_reviewer.username }}{% else %}—{% endif %}</td></tr>
+        <tr><td class="muted">Submitted</td><td>{{ sub.submitted_at|date:"d M Y H:i"|default:"—" }}</td></tr>
+        <tr><td class="muted">Total grains</td><td>{{ total }}{% if unlabeled %} · <span class="amber">{{ unlabeled }} unlabeled</span>{% endif %}</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">Label breakdown</div>
+      {% for r in label_rows %}
+        <div class="legend-row"><span><span class="sw" style="display:inline-block;width:12px;height:12px;border-radius:3px;background:{{ r.color }}"></span> {{ r.label }}</span><strong>{{ r.n }}</strong></div>
+      {% empty %}<p class="muted small">No labeled grains.</p>{% endfor %}
+    </div>
+    <div class="card">
+      <div class="card-title">Measurements (parameters)</div>
+      <table class="data">
+        {% for name, grams, pct in measurements %}
+        <tr>
+          <td class="muted">{{ name }}</td>
+          <td class="right">{% if grams is not None %}{{ grams }} g{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="right small muted">{% if pct is not None %}{{ pct }}%{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      <p class="muted small mt">Capture: {% if quality.ring_cover %}plate cover {{ quality.ring_cover }}{% endif %}{% if quality.mean_luminance %} · luminance {{ quality.mean_luminance|floatformat:0 }}{% endif %}{% if quality.glare %} · glare flagged{% endif %}</p>
+    </div>
+    <div class="card">
+      <div class="card-title">Admin decision</div>
+      {% if sub.status == 'qc_rejected' %}
+        <div class="banner banner-error small">This submission is already rejected.</div>
+      {% elif sub.status == 'rework_requested' %}
+        <div class="banner banner-orange small">Already returned for rework.</div>
+      {% endif %}
+      <form method="post" action="{% url 'dashboard:admin_reject' pk=sub.id %}" onsubmit="return confirm('Reject this submission? It will be marked QC Rejected.')">
+        {% csrf_token %}
+        <label class="field">Reason (recorded with the decision)</label>
+        <textarea name="notes" rows="2" placeholder="Why is this being rejected?"></textarea>
+        <button class="btn btn-danger mt" type="submit" style="width:100%">Reject submission</button>
+      </form>
+      <form method="post" action="{% url 'dashboard:admin_rework' pk=sub.id %}" onsubmit="return confirm('Send this sample back to the assayer for rework?')" class="mt">
+        {% csrf_token %}
+        <input name="notes" placeholder="What needs fixing? (optional)">
+        <button class="btn mt" type="submit" style="width:100%">Send back for rework</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% if sub.crop_image %}
+<script id="det-particles" type="application/json">{{ particles_json|safe }}</script>
+<script>
+(function(){
+  const C={{ crop_size|safe }}, W=C[0],H=C[1];
+  const ps=JSON.parse(document.getElementById('det-particles').textContent);
+  const svg=document.getElementById('det-svg'); svg.setAttribute('viewBox','0 0 '+W+' '+H);
+  const NS='http://www.w3.org/2000/svg';
+  const img=document.createElementNS(NS,'image');
+  img.setAttributeNS('http://www.w3.org/1999/xlink','href',"{{ sub.crop_image.url|safe }}");
+  img.setAttribute('href',"{{ sub.crop_image.url|safe }}"); img.setAttribute('width',W); img.setAttribute('height',H); svg.appendChild(img);
+  const sw=Math.max(1,W/900);
+  ps.filter(p=>!p.unlabeled).forEach(p=>{const pl=document.createElementNS(NS,'polygon');pl.setAttribute('points',p.polygon.map(q=>q.join(',')).join(' '));pl.setAttribute('fill','none');pl.setAttribute('stroke',p.color);pl.setAttribute('stroke-width',sw);svg.appendChild(pl);});
+  ps.filter(p=>p.unlabeled).forEach(p=>{const pl=document.createElementNS(NS,'polygon');pl.setAttribute('points',p.polygon.map(q=>q.join(',')).join(' '));pl.setAttribute('fill','rgba(241,196,15,.3)');pl.setAttribute('stroke','#F1C40F');pl.setAttribute('stroke-width',sw*2);pl.setAttribute('stroke-dasharray',(sw*4)+','+(sw*3));svg.appendChild(pl);});
+})();
+</script>
+{% endif %}
+{% endblock %}

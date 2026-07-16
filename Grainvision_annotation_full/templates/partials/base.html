@@ -1,0 +1,61 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% block title %}{{ PLATFORM_NAME }}{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+{% block chrome %}
+  <div class="topbar">
+    <button class="menu-toggle" id="menuToggle" aria-label="Open menu">☰</button>
+    <a class="brand" href="{% url 'core:home' %}" style="color:#fff">
+      <span class="logo">G</span>
+      <span class="brand-name">{{ PLATFORM_NAME }}</span>
+    </a>
+    {% block crumb %}{% endblock %}
+    <span class="spacer"></span>
+    {% if user.is_authenticated %}
+      <span class="user">
+        <span class="avatar">{{ user.initials }}</span>
+        <span class="user-name">{{ user.get_full_name|default:user.username }} · {{ user.get_role_display }}</span>
+      </span>
+      <a href="{% url 'accounts:logout' %}" title="Sign out" style="margin-left:8px">Sign out</a>
+    {% endif %}
+  </div>
+
+  <div class="sidebar-backdrop" id="sbBackdrop"></div>
+
+  <div class="layout">
+    {% block sidebar %}{% endblock %}
+    <div class="main">
+      {% if messages %}
+        <div class="msg-stack" id="msgStack">
+          {% for m in messages %}
+            <div class="banner {% if m.tags == 'error' %}banner-error{% elif m.tags == 'success' %}banner-ok{% elif m.tags == 'warning' %}banner-amber{% else %}banner-info{% endif %}">{{ m }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+{% endblock %}
+  <script>
+    setTimeout(function(){ var s=document.getElementById('msgStack'); if(s){ s.style.transition='opacity .4s'; s.style.opacity='0'; setTimeout(()=>s.remove(),400);} }, 5000);
+    window.csrftoken = "{{ csrf_token }}";
+    (function(){
+      var t=document.getElementById('menuToggle'),
+          sb=document.querySelector('.sidebar'),
+          bd=document.getElementById('sbBackdrop');
+      function close(){ document.body.classList.remove('nav-open'); }
+      if(t&&sb){ t.addEventListener('click',function(){ document.body.classList.toggle('nav-open'); }); }
+      if(bd){ bd.addEventListener('click',close); }
+      if(sb){ sb.addEventListener('click',function(e){ if(e.target.tagName==='A') close(); }); }
+    })();
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

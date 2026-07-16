@@ -1,0 +1,35 @@
+{% extends 'partials/base.html' %}
+{% block title %}Dataset export{% endblock %}
+{% block sidebar %}{% include 'partials/sidebar.html' with active='export' %}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div><h2 style="margin:0">Dataset export</h2><p class="muted small" style="margin:2px 0 0">COCO-format export with per-commodity readiness gates (PRD §12)</p></div>
+  <a class="btn btn-primary" href="{% url 'dashboard:export_coco' %}">Export all (COCO) →</a>
+</div>
+
+{% for r in readiness %}
+  <div class="card">
+    <div class="flex-between">
+      <div class="card-title" style="margin:0">{{ r.commodity.name }} <span class="muted small">· {{ r.n }} approved</span></div>
+      {% if r.ready %}<span class="badge badge-approved">Ready</span>{% else %}<span class="badge badge-warn">Not ready</span>{% endif %}
+    </div>
+    <div class="flex gap mt" style="flex-wrap:wrap">
+      {% for gate, info in r.gates.items %}
+        <span class="badge {% if info.1 %}badge-approved{% else %}badge-rejected{% endif %}">
+          {% if info.1 %}✓{% else %}✗{% endif %} {{ gate }} <span class="muted">({{ info.0 }})</span>
+        </span>
+      {% endfor %}
+    </div>
+    <div class="flex gap mt">
+      <a class="btn" href="{% url 'dashboard:export_coco' %}?commodity={{ r.commodity.code }}">Export {{ r.commodity.name }} (COCO)</a>
+    </div>
+  </div>
+{% empty %}
+  <div class="card"><p class="muted">No active commodities configured.</p></div>
+{% endfor %}
+
+<div class="banner banner-info small">
+  Only QC-approved, auto-captured submissions with zero uncertain particles, complete measurements, 20–500 particles, and complete EXIF are included in exports (PRD §12.2). Every export is validated against the COCO schema before download (PRD §15.4).
+</div>
+{% endblock %}

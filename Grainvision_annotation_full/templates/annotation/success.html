@@ -1,0 +1,26 @@
+{% extends 'partials/base.html' %}
+{% block title %}Submitted · {{ submission.public_id }}{% endblock %}
+{% block sidebar %}{% include 'partials/sidebar.html' with active='workspace' %}{% endblock %}
+{% block crumb %}<span class="crumb">/ Submitted</span>{% endblock %}
+
+{% block content %}
+<div style="max-width:520px;margin:40px auto;text-align:center">
+  <div style="width:64px;height:64px;border-radius:50%;background:var(--ok);margin:0 auto 18px;display:grid;place-items:center;color:#fff;font-size:30px">✓</div>
+  <h2 style="margin:0 0 6px">Sample submitted for QC review</h2>
+  <p class="muted">{{ submission.commodity.name }} sample #{{ submission.sample_number }} submitted successfully. A QC reviewer will verify your annotations.</p>
+
+  <div class="card" style="text-align:left;margin-top:24px">
+    <div class="card-title">Submission summary</div>
+    <div class="legend-row"><span class="muted">Submission ID</span><strong>{{ submission.public_id }}</strong></div>
+    <div class="legend-row"><span class="muted">Commodity</span><span>{{ submission.commodity.name }}</span></div>
+    <div class="legend-row"><span class="muted">Mandi</span><span>{{ submission.mandi.name }} — {{ submission.mandi.state }}</span></div>
+    <div class="legend-row"><span class="muted">Particles annotated</span><span>{{ submission.particle_count }}</span></div>
+    <div class="legend-row"><span class="muted">Status</span><span class="badge badge-pending">Pending QC review</span></div>
+  </div>
+
+  <div class="flex gap mt" style="justify-content:center">
+    <a class="btn" href="{% url 'annotation:start' %}">New sample</a>
+    <a class="btn btn-primary" href="{% url 'annotation:workspace' %}">Back to my samples →</a>
+  </div>
+</div>
+{% endblock %}

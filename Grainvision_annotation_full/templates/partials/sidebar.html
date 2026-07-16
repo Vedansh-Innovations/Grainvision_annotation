@@ -1,0 +1,31 @@
+{% load static %}
+<div class="sidebar">
+  {% if user.is_platform_admin %}
+    <div class="group">Admin</div>
+    <a href="{% url 'dashboard:overview' %}" class="{% if active == 'overview' %}active{% endif %}">Dashboard</a>
+    <a href="{% url 'dashboard:user_management' %}" class="{% if active == 'users' %}active{% endif %}">Users</a>
+    <a href="{% url 'dashboard:reference_data' %}" class="{% if active == 'reference' %}active{% endif %}">Mandis &amp; commodities</a>
+    <a href="{% url 'dashboard:submissions' %}" class="{% if active == 'submissions' %}active{% endif %}">All submissions</a>
+    <div class="group">Data</div>
+    <a href="{% url 'qc:queue' %}" class="{% if active == 'queue' %}active{% endif %}">QC queue
+      {% if pending_count %}<span class="pill">{{ pending_count }}</span>{% endif %}</a>
+    <a href="{% url 'dashboard:dataset_export' %}" class="{% if active == 'export' %}active{% endif %}">Dataset export</a>
+    <div class="group">System</div>
+    <a href="{% url 'dashboard:audit_log' %}" class="{% if active == 'audit' %}active{% endif %}">Audit log</a>
+
+  {% elif user.is_qc %}
+    <div class="group">QC Reviewer</div>
+    <a href="{% url 'qc:queue' %}" class="{% if active == 'queue' %}active{% endif %}">Review queue
+      {% if pending_count %}<span class="pill">{{ pending_count }}</span>{% endif %}</a>
+
+  {% elif user.is_ml_engineer %}
+    <div class="group">ML Engineer</div>
+    <a href="{% url 'dashboard:dataset_export' %}" class="{% if active == 'export' %}active{% endif %}">Dataset export</a>
+
+  {% else %}
+    <div class="group">Assayer</div>
+    <a href="{% url 'annotation:workspace' %}" class="{% if active == 'workspace' %}active{% endif %}">My samples
+      {% if rework_count %}<span class="pill">{{ rework_count }}</span>{% endif %}</a>
+    <a href="{% url 'annotation:start' %}" class="{% if active == 'start' %}active{% endif %}">New sample</a>
+  {% endif %}
+</div>

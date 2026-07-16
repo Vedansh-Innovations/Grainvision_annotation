@@ -1,0 +1,29 @@
+{% extends 'partials/base.html' %}
+{% block title %}Audit log{% endblock %}
+{% block sidebar %}{% include 'partials/sidebar.html' with active='audit' %}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div><h2 style="margin:0">Audit log</h2><p class="muted small" style="margin:2px 0 0">Most recent 300 entries · append-only (PRD §11.1)</p></div>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden">
+  <table class="data">
+    <thead><tr><th>When</th><th>User</th><th>Action</th><th>Entity</th><th>Detail</th><th>IP</th></tr></thead>
+    <tbody>
+      {% for e in entries %}
+        <tr>
+          <td class="muted small">{{ e.created_at|date:"d M Y H:i:s" }}</td>
+          <td>{% if e.user %}{{ e.user.get_full_name|default:e.user.username }}{% else %}—{% endif %}</td>
+          <td><span class="badge">{{ e.get_action_display }}</span></td>
+          <td class="small">{{ e.entity_type }} · {{ e.entity_id|truncatechars:14 }}</td>
+          <td class="small muted mono">{{ e.payload }}</td>
+          <td class="muted small">{{ e.ip_address|default:"—" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6" class="muted" style="text-align:center;padding:24px">No audit entries yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

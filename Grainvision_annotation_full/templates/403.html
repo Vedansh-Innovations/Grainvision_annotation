@@ -1,0 +1,10 @@
+{% extends 'partials/base.html' %}
+{% block title %}Access denied{% endblock %}
+{% block content %}
+<div style="max-width:480px;margin:60px auto;text-align:center">
+  <div style="font-size:42px">🔒</div>
+  <h2 style="margin:8px 0">This area isn't available for your role</h2>
+  <p class="muted">Your account doesn't have permission to view this page. If you think this is a mistake, contact your administrator.</p>
+  <a class="btn btn-primary mt" href="{% url 'core:home' %}">Go to my home</a>
+</div>
+{% endblock %}
