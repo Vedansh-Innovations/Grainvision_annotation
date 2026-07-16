@@ -60,7 +60,6 @@
     <div class="tbtn" data-act="fit" title="Fit (0)">⤢</div>
     <div class="tbtn" data-act="finish" title="Finish polygon (Enter)">✔</div>
     <div class="tbtn danger" data-act="delete" title="Delete selected (Del)">🗑</div>
-    <div class="tbtn" data-act="suspect" title="Next suspected foreign (F)">⚠</div>
   </div>
 
   <div>
@@ -85,12 +84,11 @@
     <div class="card">
       <div class="flex-between"><span class="muted small">Progress</span><span><strong id="doneCount">0</strong> / <span id="totalCount">0</span></span></div>
       <div class="progress-bar mt"><div class="fill" id="progFill" style="background:var(--teal,#0d9488);width:0%"></div></div>
-      <div class="legend-row mt"><span><span class="sw" style="background:#E74C3C;display:inline-block"></span> Suspected foreign</span><strong class="cnt" id="susCount">0</strong></div>
       <div class="legend-row"><span><span class="sw" style="background:#8e44ad;display:inline-block"></span> QC changed</span><strong class="cnt" id="qcCount">0</strong></div>
       <a class="btn btn-primary mt" style="width:100%;text-align:center" href="{% url 'annotation:pre_submit' pk=submission.id %}">Review &amp; submit →</a>
     </div>
     <div class="card"><div class="card-title">Selected</div><div class="small" id="selInfo">Nothing selected.</div></div>
-    <div class="card small muted desk-shortcuts"><strong>Shortcuts:</strong> V select · G label · D redraw · P/R/O/T shapes · H pan · 1–{{ labels|length }} class · F next suspect · Del delete · Esc cancel · click-drag empty = box multi-select (max 10)</div>
+    <div class="card small muted desk-shortcuts"><strong>Shortcuts:</strong> V select · G label · D redraw · P/R/O/T shapes · H pan · 1–{{ labels|length }} class · Del delete · Esc cancel · click-drag empty = box multi-select (max 10)</div>
   </div>
 </div>
 
@@ -124,7 +122,6 @@
   function fit(){const r=stage.getBoundingClientRect();const s=Math.min(r.width/W,r.height/H)*0.96;view={scale:s,x:(r.width-W*s)/2,y:(r.height-H*s)/2};render();}
   function zoomAt(sx,sy,f){const ix=(sx-view.x)/view.scale,iy=(sy-view.y)/view.scale;view.scale=Math.max(0.05,Math.min(40,view.scale*f));view.x=sx-ix*view.scale;view.y=sy-iy*view.scale;render();}
   const pById=id=>particles.find(p=>p.id===id);
-  const isSus=p=>p.features&&p.features.foreign_suspect&&p.label==='unlabeled';
   const norm=(a,b)=>[Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.max(a[0],b[0]),Math.max(a[1],b[1])];
   const centroid=poly=>{let x=0,y=0;poly.forEach(p=>{x+=p[0];y+=p[1];});return [x/poly.length,y/poly.length];};
   const labelName=v=>{const l=labels.find(x=>x.value===v);return l?l.label:v;};
@@ -137,13 +134,13 @@
     img.setAttributeNS('http://www.w3.org/1999/xlink','href',cropImg); img.setAttribute('href',cropImg);
     img.style.filter='brightness('+document.getElementById('bright').value+'%)'; g.appendChild(img);
     particles.forEach(p=>{
-      const col=colorOf[p.label]||'#95A5A6', selected=sel.has(p.id), sus=isSus(p), qc=p.qc_overridden;
+      const col=colorOf[p.label]||'#95A5A6', selected=sel.has(p.id), qc=p.qc_overridden;
       g.appendChild(el('polygon',{points:p.polygon.map(q=>q.join(',')).join(' '),
         fill:hexA(col,p.label==='unlabeled'?0.06:0.28),
-        stroke: selected?'#22d3ee':(qc?'#8e44ad':(sus?'#E74C3C':col)),
-        'stroke-width':(selected?2.6:(qc||sus?1.8:1.1)),'stroke-dasharray':sus?'4,3':'',
+        stroke: selected?'#22d3ee':(qc?'#8e44ad':col),
+        'stroke-width':(selected?2.6:(qc?1.8:1.1)),
         'vector-effect':'non-scaling-stroke','data-id':p.id,'class':'poly'}));
-      if(sus||qc){const c=centroid(p.polygon);const t=el('text',{x:c[0],y:c[1],fill:qc?'#8e44ad':'#E74C3C','font-size':13/view.scale,'text-anchor':'middle','dominant-baseline':'central','pointer-events':'none'});t.textContent=qc?'QC':'⚠';g.appendChild(t);}
+      if(qc){const c=centroid(p.polygon);const t=el('text',{x:c[0],y:c[1],fill:'#8e44ad','font-size':13/view.scale,'text-anchor':'middle','dominant-baseline':'central','pointer-events':'none'});t.textContent='QC';g.appendChild(t);}
     });
     if(sel.size===1&&(tool==='select'||tool==='redraw')){const p=pById([...sel][0]);if(p)p.polygon.forEach((q,i)=>g.appendChild(el('circle',{cx:q[0],cy:q[1],r:4/view.scale,fill:'#fff',stroke:'#22d3ee','stroke-width':1.5/view.scale,'class':'vh','data-idx':i})));}
     if(draft){
@@ -166,7 +163,6 @@
     document.getElementById('selcount').textContent=sel.size;
     document.getElementById('totalCount').textContent=total;
     document.getElementById('doneCount').textContent=done;
-    document.getElementById('susCount').textContent=particles.filter(isSus).length;
     document.getElementById('qcCount').textContent=particles.filter(p=>p.qc_overridden).length;
     document.getElementById('progFill').style.width=(total?Math.round(done/total*100):0)+'%';
     labels.forEach(l=>{const c=document.getElementById('cc_'+l.value);if(c)c.textContent=particles.filter(p=>p.label===l.value).length;});
@@ -205,9 +201,8 @@
     if(sel.size===0){info.textContent='Nothing selected.';return;}
     if(sel.size>1){info.innerHTML='<strong>'+sel.size+'</strong> selected. Pick a class (or press 1–5) to tag them all, or 🗑 to delete.';return;}
     const p=pById([...sel][0]);
-    info.innerHTML='#'+p.particle_id+' · <strong style="color:'+colorOf[p.label]+'">'+labelName(p.label)+'</strong><br><span class="muted">'+(p.origin==='auto'?'auto':'added')+(p.qc_overridden?' · QC changed':'')+(p.features&&p.features.foreign_suspect?' · ⚠ suspect':'')+'</span>';
+    info.innerHTML='#'+p.particle_id+' · <strong style="color:'+colorOf[p.label]+'">'+labelName(p.label)+'</strong><br><span class="muted">'+(p.origin==='auto'?'auto':'added')+(p.qc_overridden?' · QC changed':'')+'</span>';
   }
-  function nextSuspect(){const list=particles.filter(isSus);if(!list.length){setStatus('No suspected foreign left.');return;}const p=list[0],c=centroid(p.polygon),r=stage.getBoundingClientRect();view.scale=Math.min(8,Math.max(view.scale,2));view.x=r.width/2-c[0]*view.scale;view.y=r.height/2-c[1]*view.scale;selectTool('select');sel=new Set([p.id]);selInfo();setStatus('Suspected foreign — set its class.');}
   const hitId=ev=>{const t=ev.target;return (t&&t.classList&&t.classList.contains('poly'))?parseInt(t.getAttribute('data-id')):null;};
   function finishDraft(){if(!draft)return;
     if((draft.type==='polygon')&&draft.pts.length>=3)addShape(draft.pts.slice());
@@ -270,7 +265,7 @@
 
   document.querySelectorAll('.tbtn[data-tool]').forEach(b=>b.onclick=()=>selectTool(b.dataset.tool));
   document.querySelectorAll('.tbtn[data-act]').forEach(b=>b.onclick=()=>{const a=b.dataset.act,r=stage.getBoundingClientRect();
-    if(a==='zoomin')zoomAt(r.width/2,r.height/2,1.2);if(a==='fit')fit();if(a==='suspect')nextSuspect();if(a==='finish')finishDraft();if(a==='delete')delSelected();
+    if(a==='zoomin')zoomAt(r.width/2,r.height/2,1.2);if(a==='fit')fit();if(a==='finish')finishDraft();if(a==='delete')delSelected();
     if(a==='wand'){magicWand=!magicWand;b.classList.toggle('active',magicWand);setStatus('Magic wand '+(magicWand?'ON — drawn shapes snap to the grain.':'OFF — shapes are kept as drawn.'));}});
   document.getElementById('bright').oninput=render;
 
@@ -279,7 +274,6 @@
     const k=e.key.toLowerCase(), map={v:'select',g:'grain',d:'redraw',p:'polygon',r:'rect',o:'ellipse',t:'point',h:'pan'};
     if(map[k]){selectTool(map[k]);return;}
     if(/^[1-9]$/.test(k)&&+k<=labels.length){const l=labels[+k-1];if(l)setActive(l.value);return;}
-    if(k==='f'){nextSuspect();return;}
     if(k==='w'){magicWand=!magicWand;const b=document.querySelector('.tbtn[data-act=wand]');if(b)b.classList.toggle('active',magicWand);setStatus('Magic wand '+(magicWand?'ON':'OFF'));return;}
     if(e.key==='Enter'){finishDraft();return;}
     if(e.key==='Escape'){draft=null;sel.clear();selInfo();render();return;}
