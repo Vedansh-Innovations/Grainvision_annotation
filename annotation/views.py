@@ -161,7 +161,10 @@ def capture_submit(request, pk):
     pil = Image.open(io.BytesIO(raw)).convert("RGB")
     bgr = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
-    result = segmentation.segment_image(bgr, sub.commodity)
+    # The current capture page crops to the guide client-side and flags it;
+    # skip server plate re-detection for those uploads (see isolate_plate).
+    pre_cropped = bool(scores.get("exif", {}).get("cropped_to_guide"))
+    result = segmentation.segment_image(bgr, sub.commodity, pre_cropped=pre_cropped)
 
     crop_rgb = cv2.cvtColor(result["crop_bgr"], cv2.COLOR_BGR2RGB)
     crop_buf = io.BytesIO()
