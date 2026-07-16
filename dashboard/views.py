@@ -21,7 +21,7 @@ from accounts.models import Role
 from accounts.permissions import role_required, is_admin, is_ml_or_admin
 from core.models import AuditLog, AuditAction, Commodity, Mandi
 from annotation.models import (
-    Submission, Particle, ParticleLabel, LABEL_COLORS, SubmissionStatus,
+    Submission, Particle, ParticleLabel, SubmissionStatus,
 )
 from ml import export as coco_export
 
@@ -61,13 +61,23 @@ def overview(request):
     if f_to:
         parts = parts.filter(submission__submitted_at__date__lte=f_to)
 
-    dist = {l.value: 0 for l in ParticleLabel if l != ParticleLabel.UNLABELED}
+    # Merge the class sets of every commodity: the five locked defaults first,
+    # then any admin-defined extras (union across commodities).
+    merged, seen = [], set()
+    for c in Commodity.objects.all():
+        for cls in c.annotation_classes():
+            if cls["value"] not in seen:
+                seen.add(cls["value"])
+                merged.append(cls)
+    dist = {cls["value"]: 0 for cls in merged}
     for r in parts.values("label").annotate(n=Count("id")):
         if r["label"] in dist:
             dist[r["label"]] = r["n"]
     grand = sum(dist.values()) or 1
+    class_by_value = {cls["value"]: cls for cls in merged}
     label_dist = [
-        {"label": ParticleLabel(k).label, "value": k, "color": LABEL_COLORS[ParticleLabel(k)],
+        {"label": class_by_value[k]["label"], "value": k,
+         "color": class_by_value[k]["color"],
          "pct": round(v / grand * 100, 1), "minority": (v / grand * 100) < MINORITY_THRESHOLD}
         for k, v in dist.items()
     ]
@@ -384,6 +394,73 @@ def commodity_toggle(request, pk):
     return redirect("dashboard:reference_data")
 
 
+@login_required
+@role_required(is_admin)
+@require_POST
+def commodity_add_class(request, pk):
+    """Add an extra annotation class (name only — color is auto-assigned)."""
+    from core.models import RESERVED_CLASS_VALUES, class_value_from_name
+
+    c = get_object_or_404(Commodity, pk=pk)
+    name = (request.POST.get("class_name") or "").strip()
+    if not name:
+        messages.error(request, "Class name is required.")
+        return redirect("dashboard:reference_data")
+
+    value = class_value_from_name(name)
+    if not value:
+        messages.error(request, "Class name must contain letters or numbers.")
+        return redirect("dashboard:reference_data")
+    if value in RESERVED_CLASS_VALUES:
+        messages.error(
+            request,
+            f"“{name}” clashes with a built-in class — the five defaults are "
+            f"already on every commodity.")
+        return redirect("dashboard:reference_data")
+    if any(e["value"] == value for e in c.extra_class_list):
+        messages.error(request, f"“{c.name}” already has a class named “{name}”.")
+        return redirect("dashboard:reference_data")
+
+    c.extra_classes = c.extra_class_list + [{"value": value, "label": name}]
+    c.save(update_fields=["extra_classes"])
+    AuditLog.record(user=request.user, action=AuditAction.USER_UPDATE,
+                    entity_type="commodity", entity_id=c.id,
+                    payload={"class_added": value, "label": name})
+    messages.success(request, f"Class “{name}” added to “{c.name}”.")
+    return redirect("dashboard:reference_data")
+
+
+@login_required
+@role_required(is_admin)
+@require_POST
+def commodity_remove_class(request, pk):
+    """Remove an extra class — blocked while any particle still uses it."""
+    c = get_object_or_404(Commodity, pk=pk)
+    value = (request.POST.get("class_value") or "").strip()
+    entry = next((e for e in c.extra_class_list if e["value"] == value), None)
+    if entry is None:
+        messages.error(request, "That class is not removable (built-in or unknown).")
+        return redirect("dashboard:reference_data")
+
+    in_use = Particle.objects.filter(
+        submission__commodity=c
+    ).filter(Q(label=value) | Q(qc_label_override=value)).count()
+    if in_use:
+        messages.error(
+            request,
+            f"Cannot remove “{entry['label']}” — {in_use} particle(s) are "
+            f"labeled with it. Relabel them first.")
+        return redirect("dashboard:reference_data")
+
+    c.extra_classes = [e for e in c.extra_class_list if e["value"] != value]
+    c.save(update_fields=["extra_classes"])
+    AuditLog.record(user=request.user, action=AuditAction.USER_UPDATE,
+                    entity_type="commodity", entity_id=c.id,
+                    payload={"class_removed": value})
+    messages.success(request, f"Class “{entry['label']}” removed from “{c.name}”.")
+    return redirect("dashboard:reference_data")
+
+
 # ── Admin: browse everything submitted (read-only) with full filters ──
 @login_required
 @role_required(is_admin)
@@ -454,21 +531,23 @@ def admin_reject(request, pk):
 @role_required(is_admin)
 def submission_detail(request, pk):
     import json
-    from annotation.models import ParticleLabel, LABEL_COLORS
+    from annotation.models import ParticleLabel
     sub = get_object_or_404(
         Submission.objects.select_related("commodity", "mandi", "assayer", "qc_reviewer"),
         pk=pk)
     particles = list(sub.particles.all())
+    colors = sub.commodity.class_color_map()
+    names = sub.commodity.class_label_map()
     counts = {}
     for p in particles:
         counts[p.effective_label] = counts.get(p.effective_label, 0) + 1
     label_rows = [
-        {"label": ParticleLabel(k).label, "color": LABEL_COLORS[ParticleLabel(k)], "n": v}
+        {"label": names.get(k, k), "color": colors.get(k, colors["unlabeled"]), "n": v}
         for k, v in sorted(counts.items(), key=lambda kv: -kv[1])
     ]
     particles_json = json.dumps([
         {"polygon": p.polygon,
-         "color": LABEL_COLORS[ParticleLabel(p.effective_label)],
+         "color": colors.get(p.effective_label, colors["unlabeled"]),
          "unlabeled": p.effective_label == ParticleLabel.UNLABELED}
         for p in particles
     ])

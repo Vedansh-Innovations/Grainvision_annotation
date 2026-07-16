@@ -260,6 +260,8 @@ def measurements(request, pk):
 
 # ── STEP 3: Annotation canvas (PRD §7) ────────────────────────────
 def _particles_payload(sub):
+    colors = sub.commodity.class_color_map()
+    fallback = LABEL_COLORS[ParticleLabel.UNLABELED]
     out = []
     for p in sub.particles.all():
         eff = p.effective_label
@@ -268,7 +270,7 @@ def _particles_payload(sub):
             "label": eff,                       # show QC's override if present
             "assayer_label": p.label,
             "qc_overridden": bool(p.qc_label_override),
-            "color": LABEL_COLORS[ParticleLabel(eff)],
+            "color": colors.get(eff, fallback),
             "polygon": p.polygon, "origin": p.origin, "uncertain": p.uncertain,
             "flagged_by_seg": p.flagged_by_seg, "features": p.features,
         })
@@ -287,10 +289,7 @@ def canvas(request, pk):
     if not sub.measurements_done:
         return redirect("annotation:measurements", pk=sub.id)
 
-    labels = [
-        {"value": l.value, "label": l.label, "color": LABEL_COLORS[l]}
-        for l in ParticleLabel if l != ParticleLabel.UNLABELED
-    ]
+    labels = sub.commodity.annotation_classes()
     return render(request, "annotation/canvas.html", {
         "submission": sub,
         "particles_json": json.dumps(_particles_payload(sub)),
@@ -314,8 +313,8 @@ def label_particle(request, pk):
     if label == "uncertain":
         p.uncertain = True
     else:
-        if label not in ParticleLabel.values:
-            return HttpResponseBadRequest("Unknown label.")
+        if not sub.commodity.is_valid_label(label):
+            return HttpResponseBadRequest("Unknown label for this commodity.")
         p.label = label
         p.uncertain = False
     # An assayer's fresh choice supersedes any QC override (keeps them in sync).
@@ -327,7 +326,9 @@ def label_particle(request, pk):
     p.save(update_fields=fields)
     return JsonResponse({
         "ok": True, "label": p.label, "uncertain": p.uncertain,
-        "color": LABEL_COLORS[ParticleLabel(p.label)], "remaining": sub.unlabeled_count,
+        "color": sub.commodity.class_color_map().get(
+            p.label, LABEL_COLORS[ParticleLabel.UNLABELED]),
+        "remaining": sub.unlabeled_count,
     })
 
 
@@ -343,7 +344,7 @@ def add_particle(request, pk):
     if not polygon or len(polygon) < 3:
         return HttpResponseBadRequest("Polygon needs at least 3 points.")
     label = data.get("label")
-    if label not in ParticleLabel.values:
+    if not sub.commodity.is_valid_label(label):
         label = ParticleLabel.UNLABELED
 
     snapped = False
@@ -372,7 +373,9 @@ def add_particle(request, pk):
     )
     return JsonResponse({
         "ok": True, "id": p.id, "particle_id": p.particle_id,
-        "label": p.label, "color": LABEL_COLORS[ParticleLabel(p.label)],
+        "label": p.label,
+        "color": sub.commodity.class_color_map().get(
+            p.label, LABEL_COLORS[ParticleLabel.UNLABELED]),
         "polygon": polygon, "snapped": snapped,
         "remaining": sub.unlabeled_count,
     })
@@ -422,10 +425,13 @@ def pre_submit(request, pk):
 
     dist = sub.label_distribution()
     total = sub.particle_count or 1
+    colors = sub.commodity.class_color_map()
+    fallback = LABEL_COLORS[ParticleLabel.UNLABELED]
     label_rows = [
-        {"label": l.label, "value": l.value, "color": LABEL_COLORS[l],
-         "count": dist[l.value], "pct": round(dist[l.value] / total * 100, 1)}
-        for l in ParticleLabel if l != ParticleLabel.UNLABELED
+        {"label": c["label"], "value": c["value"], "color": c["color"],
+         "count": dist.get(c["value"], 0),
+         "pct": round(dist.get(c["value"], 0) / total * 100, 1)}
+        for c in sub.commodity.annotation_classes()
     ]
     return render(request, "annotation/pre_submit.html", {
         "submission": sub,
@@ -435,7 +441,7 @@ def pre_submit(request, pk):
         "cross_validation": cross_validate(sub),
         "particles_json": json.dumps([
             {"polygon": p.polygon,
-             "color": LABEL_COLORS[ParticleLabel(p.effective_label)],
+             "color": colors.get(p.effective_label, fallback),
              "unlabeled": p.effective_label == ParticleLabel.UNLABELED}
             for p in sub.particles.all()
         ]),

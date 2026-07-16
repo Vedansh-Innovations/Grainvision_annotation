@@ -25,6 +25,10 @@ class ParticleLabel(models.TextChoices):
     UNLABELED = "unlabeled", "Unlabeled"
 
 
+# Colors for the five locked default classes. The authoritative, per-commodity
+# class set (defaults + admin-defined extras with auto-assigned colors) lives
+# on core.Commodity.annotation_classes(); this map remains as a fallback for
+# the defaults only.
 LABEL_COLORS = {
     ParticleLabel.GOOD: "#2ECC71",
     ParticleLabel.BROKEN: "#E67E22",
@@ -208,9 +212,9 @@ class Particle(models.Model):
     submission = models.ForeignKey(Submission, on_delete=models.CASCADE, related_name="particles")
     particle_id = models.PositiveIntegerField(help_text="Index within the submission")
 
-    label = models.CharField(
-        max_length=16, choices=ParticleLabel.choices, default=ParticleLabel.UNLABELED
-    )
+    # No fixed `choices`: valid values are the submission's commodity classes
+    # (five locked defaults + admin-defined extras) — validated in the views.
+    label = models.CharField(max_length=32, default=ParticleLabel.UNLABELED)
     polygon = models.JSONField(help_text="List of [x, y] image-space vertices")
     origin = models.CharField(max_length=8, choices=ParticleOrigin.choices, default=ParticleOrigin.AUTO)
 
@@ -222,9 +226,7 @@ class Particle(models.Model):
     features = models.JSONField(default=dict, blank=True)
 
     # QC override bookkeeping (PRD §13.3 — logged).
-    qc_label_override = models.CharField(
-        max_length=16, choices=ParticleLabel.choices, null=True, blank=True
-    )
+    qc_label_override = models.CharField(max_length=32, null=True, blank=True)
     qc_overrider = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True,
         on_delete=models.SET_NULL, related_name="particle_overrides",
@@ -245,4 +247,7 @@ class Particle(models.Model):
 
     @property
     def color(self):
-        return LABEL_COLORS.get(self.effective_label, LABEL_COLORS[ParticleLabel.UNLABELED])
+        """Resolve through the submission's commodity so extras get their color."""
+        return self.submission.commodity.class_color_map().get(
+            self.effective_label, LABEL_COLORS[ParticleLabel.UNLABELED]
+        )

@@ -10,8 +10,14 @@ class MandiAdmin(admin.ModelAdmin):
 
 @admin.register(Commodity)
 class CommodityAdmin(admin.ModelAdmin):
-    list_display = ("name", "code", "active", "expected_min_count", "expected_max_count", "target_samples")
+    list_display = ("name", "code", "active", "expected_min_count",
+                    "expected_max_count", "target_samples", "extra_class_count")
     list_filter = ("active",)
+
+    @admin.display(description="Extra classes")
+    def extra_class_count(self, obj):
+        extras = obj.extra_class_list
+        return ", ".join(e["label"] for e in extras) if extras else "—"
 
 
 @admin.register(AuditLog)

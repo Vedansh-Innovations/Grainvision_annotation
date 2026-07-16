@@ -15,15 +15,40 @@ import os
 import zipfile
 from datetime import datetime
 
-from annotation.models import ParticleLabel, SubmissionStatus
+from annotation.models import SubmissionStatus
+from core.models import DEFAULT_ANNOTATION_CLASSES
 
-CATEGORY_IDS = {
-    ParticleLabel.GOOD: 1,
-    ParticleLabel.BROKEN: 2,
-    ParticleLabel.FOREIGN: 3,
-    ParticleLabel.IMMATURE: 4,
-    ParticleLabel.FUNGAL: 5,
-}
+
+def _category_map(commodity, submissions):
+    """
+    Ordered {class value → (category_id, display label)}.
+
+    The five locked defaults always take stable ids 1–5 (so datasets exported
+    at different times stay comparable). Admin-defined extra classes follow:
+    the single commodity's extras in their configured order for a filtered
+    export, or the sorted union of extras across the exported submissions'
+    commodities for an all-commodities export.
+    """
+    mapping = {}
+    for i, cls in enumerate(DEFAULT_ANNOTATION_CLASSES, start=1):
+        mapping[cls["value"]] = (i, cls["label"])
+    next_id = len(DEFAULT_ANNOTATION_CLASSES) + 1
+    if commodity is not None:
+        extras = commodity.extra_class_list
+    else:
+        seen, extras = set(), []
+        commodities = {sub.commodity_id: sub.commodity for sub in submissions}.values()
+        for c in commodities:
+            for e in c.extra_class_list:
+                if e["value"] not in seen:
+                    seen.add(e["value"])
+                    extras.append(e)
+        extras.sort(key=lambda e: e["value"])
+    for e in extras:
+        if e["value"] not in mapping:
+            mapping[e["value"]] = (next_id, e["label"])
+            next_id += 1
+    return mapping
 
 
 def _bbox_and_area(polygon):
@@ -62,6 +87,9 @@ def build_coco(commodity=None):
     if commodity:
         qs = qs.filter(commodity=commodity)
 
+    subs = list(qs.select_related("commodity", "mandi", "assayer").prefetch_related("particles"))
+    categories = _category_map(commodity, subs)
+
     coco = {
         "info": {
             "description": "GrainVision AI annotation export",
@@ -72,16 +100,16 @@ def build_coco(commodity=None):
         "images": [],
         "annotations": [],
         "categories": [
-            {"id": cid, "name": ParticleLabel(lbl).label, "supercategory": "grain"}
-            for lbl, cid in CATEGORY_IDS.items()
+            {"id": cid, "name": label, "supercategory": "grain"}
+            for value, (cid, label) in categories.items()
         ],
     }
 
     ann_id = 1
     included = 0
-    for sub in qs.select_related("commodity", "mandi", "assayer").prefetch_related("particles"):
+    for sub in subs:
         labeled = [p for p in sub.particles.all()
-                   if p.effective_label in CATEGORY_IDS]
+                   if p.effective_label in categories]
         if not labeled:          # nothing usable to train on
             continue
         included += 1
@@ -102,7 +130,7 @@ def build_coco(commodity=None):
             coco["annotations"].append({
                 "id": ann_id,
                 "image_id": img_id,
-                "category_id": CATEGORY_IDS[p.effective_label],
+                "category_id": categories[p.effective_label][0],
                 "segmentation": [flat],
                 "bbox": [round(v, 1) for v in bbox],
                 "area": round(area, 1),

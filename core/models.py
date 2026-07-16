@@ -1,5 +1,48 @@
+import re
+
 from django.conf import settings
 from django.db import models
+
+
+# ── Annotation classes ─────────────────────────────────────────────
+# Every commodity gets these five LOCKED default classes (PRD §7.1 spec
+# colors). Admins can add extra, commodity-specific classes on top; extras
+# get colors auto-assigned from EXTRA_CLASS_PALETTE (names only — per the
+# product decision, admins never pick colors).
+DEFAULT_ANNOTATION_CLASSES = [
+    {"value": "good",     "label": "Good grain",        "color": "#2ECC71"},
+    {"value": "broken",   "label": "Broken grain",      "color": "#E67E22"},
+    {"value": "foreign",  "label": "Foreign particle",  "color": "#E74C3C"},
+    {"value": "immature", "label": "Immature grain",    "color": "#9B59B6"},
+    {"value": "fungal",   "label": "Fungal / infected", "color": "#1ABC9C"},
+]
+UNLABELED_COLOR = "#95A5A6"
+
+# Auto-assign colors for admin-defined extra classes. Chosen to stay visually
+# distinct from the five defaults, unlabeled grey (#95A5A6), the uncertain
+# yellow (#F1C40F), the selection cyan (#22d3ee) and the QC purple (#8e44ad).
+EXTRA_CLASS_PALETTE = [
+    "#3498DB",  # blue
+    "#E84393",  # pink
+    "#8D6E63",  # brown
+    "#B8860B",  # dark gold
+    "#34495E",  # slate navy
+    "#FF7F50",  # coral
+    "#6C5CE7",  # indigo
+    "#00838F",  # deep cyan
+]
+
+# Values that can never be used for a custom class: the locked defaults,
+# plus internal pseudo-labels used by the annotation flow.
+RESERVED_CLASS_VALUES = {c["value"] for c in DEFAULT_ANNOTATION_CLASSES} | {
+    "unlabeled", "uncertain",
+}
+
+
+def class_value_from_name(name):
+    """Slug a display name into a stable class value: 'Weevil damaged' → 'weevil_damaged'."""
+    v = re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_")
+    return v[:32]
 
 
 class Mandi(models.Model):
@@ -41,12 +84,60 @@ class Commodity(models.Model):
     # Dataset target for the admin progress bars (PRD §10.1 / §12.1).
     target_samples = models.PositiveIntegerField(default=500)
 
+    # Admin-defined extra annotation classes for this commodity, on top of the
+    # five locked defaults. Stored as [{"value": "weevil_damaged",
+    # "label": "Weevil damaged"}, ...] — colors are auto-assigned by position
+    # from EXTRA_CLASS_PALETTE, never stored.
+    extra_classes = models.JSONField(default=list, blank=True)
+
     class Meta:
         ordering = ["name"]
         verbose_name_plural = "Commodities"
 
     def __str__(self):
         return self.name
+
+    # ── Dynamic annotation classes ─────────────────────────────────
+    @property
+    def extra_class_list(self):
+        """Normalized list of this commodity's extra classes (may be empty)."""
+        out = []
+        for item in self.extra_classes or []:
+            if isinstance(item, dict) and item.get("value") and item.get("label"):
+                out.append({"value": str(item["value"]), "label": str(item["label"])})
+        return out
+
+    def annotation_classes(self):
+        """
+        Full ordered class set for this commodity: the five locked defaults
+        first (stable positions → stable keyboard shortcuts 1–5), then any
+        admin-defined extras with palette-assigned colors.
+        Each entry: {"value", "label", "color", "locked"}.
+        """
+        classes = [{**c, "locked": True} for c in DEFAULT_ANNOTATION_CLASSES]
+        for i, extra in enumerate(self.extra_class_list):
+            classes.append({
+                **extra,
+                "color": EXTRA_CLASS_PALETTE[i % len(EXTRA_CLASS_PALETTE)],
+                "locked": False,
+            })
+        return classes
+
+    def class_color_map(self):
+        """value → color for every class of this commodity, incl. 'unlabeled'."""
+        m = {c["value"]: c["color"] for c in self.annotation_classes()}
+        m["unlabeled"] = UNLABELED_COLOR
+        return m
+
+    def class_label_map(self):
+        """value → display label for every class, incl. 'unlabeled'."""
+        m = {c["value"]: c["label"] for c in self.annotation_classes()}
+        m["unlabeled"] = "Unlabeled"
+        return m
+
+    def is_valid_label(self, value):
+        """True if `value` is an assignable class for this commodity."""
+        return any(c["value"] == value for c in self.annotation_classes())
 
 
 class AuditAction(models.TextChoices):
