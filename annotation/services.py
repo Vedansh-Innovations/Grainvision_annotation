@@ -59,6 +59,29 @@ def validate_measurements(total, class_weights, class_labels=None):
     return (not errors), errors, needs_zero_confirmation
 
 
+def segmentation_flags(particle_count, merge_flagged_count, dark_fraction, expected_min):
+    flags = []
+    if particle_count < max(20, expected_min):
+        flags.append({
+            "code": "LOW_PARTICLE_COUNT",
+            "level": "warning",
+            "message": "Fewer particles than expected. Check plate fill.",
+        })
+    if particle_count and merge_flagged_count / particle_count >= 0.10:
+        flags.append({
+            "code": "MERGE_SUSPECTED",
+            "level": "orange",
+            "message": "Some particles may be merged. Review flagged regions.",
+        })
+    if dark_fraction > 0.05:
+        flags.append({
+            "code": "DARK_REGION",
+            "level": "warning",
+            "message": "Shadowed region detected. Particles may not segment correctly.",
+        })
+    return flags
+
+
 def cross_validate(submission):
     """
     Compare each class's measured weight-fraction against its labeled
