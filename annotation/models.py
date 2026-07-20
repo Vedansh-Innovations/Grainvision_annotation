@@ -82,7 +82,12 @@ class Submission(models.Model):
     foreign_matter_g = models.DecimalField(**g)
     fungal_grains_g = models.DecimalField(**g)
     immature_grains_g = models.DecimalField(**g)
-    organic_matter_g = models.DecimalField(**g)
+    organic_matter_g = models.DecimalField(**g)   # legacy — superseded by class_weights
+    # Per-class measured weights in grams, keyed by the commodity's class
+    # values (the five defaults + any admin-defined extras), e.g.
+    # {"good": "231.40", "broken": "12.05", ...}. Stored as strings to keep
+    # exact decimals through JSON.
+    class_weights = models.JSONField(default=dict, blank=True)
     measurements_done = models.BooleanField(default=False)
 
     # ── Image storage (PRD §5.3) ──────────────────────────────────
@@ -173,6 +178,43 @@ class Submission(models.Model):
     def immature_pct(self): return self._pct(self.immature_grains_g)
     @property
     def organic_pct(self): return self._pct(self.organic_matter_g)
+
+    # ── Dynamic per-class weights (per commodity classes) ──────────
+    def class_weight_g(self, value):
+        """Measured weight (Decimal) for a class value, or None."""
+        from decimal import Decimal, InvalidOperation
+        raw = (self.class_weights or {}).get(value)
+        if raw in (None, ""):
+            # fall back to the legacy fixed columns for old rows
+            legacy = {"foreign": self.foreign_matter_g,
+                      "fungal": self.fungal_grains_g,
+                      "immature": self.immature_grains_g}.get(value)
+            return legacy
+        try:
+            return Decimal(str(raw))
+        except (InvalidOperation, TypeError):
+            return None
+
+    def class_weight_pct(self, value):
+        return self._pct(self.class_weight_g(value))
+
+    def weight_rows(self):
+        """[{value,label,color,weight_g,pct}] for every class of the commodity."""
+        rows = []
+        for c in self.commodity.annotation_classes():
+            w = self.class_weight_g(c["value"])
+            rows.append({**c, "weight_g": w, "pct": self._pct(w)})
+        return rows
+
+    @property
+    def class_weight_sum_g(self):
+        from decimal import Decimal
+        total = Decimal("0")
+        for c in self.commodity.annotation_classes():
+            w = self.class_weight_g(c["value"])
+            if w is not None:
+                total += w
+        return total
 
     @property
     def defect_sum_g(self):

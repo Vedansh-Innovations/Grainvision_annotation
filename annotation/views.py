@@ -181,6 +181,7 @@ def capture_submit(request, pk):
             "crop_size": result["crop_size"],
             "engine": result["engine"],
             "dark_fraction": result["dark_fraction"],
+            "scale": result.get("scale", {}),
             "glare": scores.get("glare", False),
         }
         sub.warnings = segmentation_flags(
@@ -217,32 +218,38 @@ def measurements(request, pk):
         messages.error(request, "Capture the grain photo first.")
         return redirect("annotation:capture", pk=sub.id)
 
+    classes = sub.commodity.annotation_classes()
+
     if request.method == "POST":
         try:
             total = Decimal(request.POST.get("total_weight_g", "")).quantize(Decimal("0.01"))
-            foreign = Decimal(request.POST.get("foreign_matter_g", "")).quantize(Decimal("0.01"))
-            fungal = Decimal(request.POST.get("fungal_grains_g", "")).quantize(Decimal("0.01"))
-            immature = Decimal(request.POST.get("immature_grains_g", "")).quantize(Decimal("0.01"))
-            organic = Decimal(request.POST.get("organic_matter_g", "")).quantize(Decimal("0.01"))
+            weights = {
+                c["value"]: Decimal(request.POST.get(f"weight_{c['value']}", "")).quantize(Decimal("0.01"))
+                for c in classes
+            }
         except (InvalidOperation, TypeError):
-            messages.error(request, "All five weights must be valid numbers to two decimals.")
-            return render(request, "annotation/measurements.html", {"submission": sub, "post": request.POST})
+            messages.error(request, "The total and every class weight must be valid numbers to two decimals.")
+            return render(request, "annotation/measurements.html",
+                          {"submission": sub, "classes": classes, "post": request.POST})
 
-        ok, errors, _zero = validate_measurements(total, foreign, fungal, immature, organic)
+        ok, errors, _zero = validate_measurements(
+            total, weights, {c["value"]: c["label"] for c in classes})
         if not ok or errors:
             for e in errors:
                 messages.error(request, e)
-            return render(request, "annotation/measurements.html", {"submission": sub, "post": request.POST})
+            return render(request, "annotation/measurements.html",
+                          {"submission": sub, "classes": classes, "post": request.POST})
 
         sub.total_weight_g = total
-        sub.foreign_matter_g = foreign
-        sub.fungal_grains_g = fungal
-        sub.immature_grains_g = immature
-        sub.organic_matter_g = organic
+        sub.class_weights = {v: str(w) for v, w in weights.items()}
+        # Mirror the three legacy defect columns so old reports keep working.
+        sub.foreign_matter_g = weights.get("foreign")
+        sub.fungal_grains_g = weights.get("fungal")
+        sub.immature_grains_g = weights.get("immature")
         sub.measurements_done = True
         sub.save(update_fields=[
-            "total_weight_g", "foreign_matter_g", "fungal_grains_g",
-            "immature_grains_g", "organic_matter_g", "measurements_done", "updated_at",
+            "total_weight_g", "class_weights", "foreign_matter_g",
+            "fungal_grains_g", "immature_grains_g", "measurements_done", "updated_at",
         ])
 
         if request.POST.get("action") == "later":
@@ -253,12 +260,11 @@ def measurements(request, pk):
     # Pre-fill if returning
     post = {}
     if sub.measurements_done:
-        post = {
-            "total_weight_g": sub.total_weight_g, "foreign_matter_g": sub.foreign_matter_g,
-            "fungal_grains_g": sub.fungal_grains_g, "immature_grains_g": sub.immature_grains_g,
-            "organic_matter_g": sub.organic_matter_g,
-        }
-    return render(request, "annotation/measurements.html", {"submission": sub, "post": post})
+        post = {"total_weight_g": sub.total_weight_g}
+        for c in classes:
+            post[f"weight_{c['value']}"] = sub.class_weight_g(c["value"])
+    return render(request, "annotation/measurements.html",
+                  {"submission": sub, "classes": classes, "post": post})
 
 
 # ── STEP 3: Annotation canvas (PRD §7) ────────────────────────────
@@ -439,6 +445,7 @@ def pre_submit(request, pk):
     return render(request, "annotation/pre_submit.html", {
         "submission": sub,
         "label_rows": label_rows,
+        "weight_rows": sub.weight_rows(),
         "uncertain": sub.uncertain_count,
         "unlabeled": sub.unlabeled_count,
         "cross_validation": cross_validate(sub),

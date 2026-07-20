@@ -21,6 +21,8 @@ env = environ.Env(
     USE_POSTGRES=(bool, False),
     USE_S3=(bool, False),
     SAM2_ENABLED=(bool, True),
+    PLATE_INNER_DIAMETER_MM=(float, 300.0),
+    SEG_WORKING_MAX_SIDE=(int, 1100),
 )
 
 # Read .env if present (never required for the app to boot).
@@ -253,3 +255,17 @@ LOGGING = {
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 15 * 1024 * 1024  # 15 MB (12MP JPEG ~4MB + headroom)
 FILE_UPLOAD_MAX_MEMORY_SIZE = 15 * 1024 * 1024
+
+
+# ── Physical scale calibration ────────────────────────────────────
+# Diameter (mm) of the standard 30 cm sampling plate, measured at the INNER
+# edge of the blue rim — where the white surface starts, since that is the
+# circle the scale is computed from. IMPORTANT: measure the real plate's inner
+# white circle with a tape (typically slightly less than the 300 mm outer
+# edge) and set PLATE_INNER_DIAMETER_MM in .env. Every capture uses the same
+# plate, so the detected rim gives px-per-mm for each image — the key to
+# camera-independent pixel→weight training data.
+PLATE_INNER_DIAMETER_MM = env("PLATE_INNER_DIAMETER_MM")
+# Segmentation runs on a downscaled working copy (speed); annotations are
+# scaled back and stored at the ORIGINAL upload resolution.
+SEG_WORKING_MAX_SIDE = env("SEG_WORKING_MAX_SIDE")

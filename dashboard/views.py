@@ -215,6 +215,31 @@ def user_toggle_active(request, pk):
 
 
 @login_required
+@role_required(is_admin)
+@require_POST
+def user_delete(request, pk):
+    """Permanently delete a user — only when they have no history."""
+    u = get_object_or_404(User, pk=pk)
+    if u.pk == request.user.pk:
+        messages.error(request, "You cannot delete your own account.")
+        return redirect("dashboard:user_management")
+    n = (Submission.objects.filter(assayer=u).count()
+         + Submission.objects.filter(qc_reviewer=u).count())
+    if n:
+        messages.error(
+            request,
+            f"Cannot delete {u}: they are linked to {n} submission(s). "
+            f"Deactivate the account instead — history must stay traceable.")
+        return redirect("dashboard:user_management")
+    name = str(u)
+    AuditLog.record(user=request.user, action=AuditAction.USER_UPDATE,
+                    entity_type="user", entity_id=u.id, payload={"deleted": name})
+    u.delete()
+    messages.success(request, f"User {name} deleted.")
+    return redirect("dashboard:user_management")
+
+
+@login_required
 @role_required(is_ml_or_admin)
 def dataset_export(request):
     """Dataset readiness per commodity + COCO export (PRD §12)."""
@@ -351,6 +376,27 @@ def mandi_toggle(request, pk):
 @login_required
 @role_required(is_admin)
 @require_POST
+def mandi_delete(request, pk):
+    """Permanently delete a mandi — only when no submissions reference it."""
+    m = get_object_or_404(Mandi, pk=pk)
+    n = Submission.objects.filter(mandi=m).count()
+    if n:
+        messages.error(
+            request,
+            f"Cannot delete “{m.name}”: {n} submission(s) reference it. "
+            f"Deactivate it instead.")
+        return redirect("dashboard:reference_data")
+    name = m.name
+    AuditLog.record(user=request.user, action=AuditAction.USER_UPDATE,
+                    entity_type="mandi", entity_id=m.id, payload={"deleted": name})
+    m.delete()
+    messages.success(request, f"Mandi “{name}” deleted.")
+    return redirect("dashboard:reference_data")
+
+
+@login_required
+@role_required(is_admin)
+@require_POST
 def commodity_create(request):
     code = (request.POST.get("code") or "").strip().upper()
     name = (request.POST.get("name") or "").strip()
@@ -391,6 +437,27 @@ def commodity_toggle(request, pk):
     c.active = not c.active
     c.save(update_fields=["active"])
     messages.success(request, f"Commodity “{c.name}” {'activated' if c.active else 'deactivated'}.")
+    return redirect("dashboard:reference_data")
+
+
+@login_required
+@role_required(is_admin)
+@require_POST
+def commodity_delete(request, pk):
+    """Permanently delete a commodity — only when no submissions reference it."""
+    c = get_object_or_404(Commodity, pk=pk)
+    n = Submission.objects.filter(commodity=c).count()
+    if n:
+        messages.error(
+            request,
+            f"Cannot delete “{c.name}”: {n} submission(s) reference it. "
+            f"Deactivate it instead.")
+        return redirect("dashboard:reference_data")
+    name = c.name
+    AuditLog.record(user=request.user, action=AuditAction.USER_UPDATE,
+                    entity_type="commodity", entity_id=c.id, payload={"deleted": name})
+    c.delete()
+    messages.success(request, f"Commodity “{name}” deleted.")
     return redirect("dashboard:reference_data")
 
 
@@ -557,12 +624,8 @@ def submission_detail(request, pk):
         "crop_size": (sub.capture_quality_scores or {}).get("crop_size", [1000, 1000]),
         "total": len(particles),
         "unlabeled": sum(1 for p in particles if p.effective_label == ParticleLabel.UNLABELED),
-        "measurements": [
-            ("Total sample weight", sub.total_weight_g, None),
-            ("Foreign matter", sub.foreign_matter_g, sub.foreign_pct),
-            ("Fungal / infected", sub.fungal_grains_g, sub.fungal_pct),
-            ("Immature grains", sub.immature_grains_g, sub.immature_pct),
-            ("Organic matter", sub.organic_matter_g, sub.organic_pct),
+        "measurements": [("Total sample weight", sub.total_weight_g, None)] + [
+            (w["label"], w["weight_g"], w["pct"]) for w in sub.weight_rows()
         ],
         "quality": sub.capture_quality_scores or {},
     })

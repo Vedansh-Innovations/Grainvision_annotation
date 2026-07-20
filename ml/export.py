@@ -115,14 +115,55 @@ def build_coco(commodity=None):
         included += 1
         w, h = _image_size(sub)
         img_id = str(sub.id)
+
+        # ── Weight-training metadata (the point of this dataset) ────
+        q = sub.capture_quality_scores or {}
+        scale = q.get("scale") or {}
+        px_per_mm = scale.get("px_per_mm")
+        # Per-class total pixel area from the stored polygons.
+        class_area_px = {}
+        for p in labeled:
+            _, a = _bbox_and_area(p.polygon)
+            class_area_px[p.effective_label] = round(class_area_px.get(p.effective_label, 0) + a, 1)
+        weights = {"total_g": float(sub.total_weight_g) if sub.total_weight_g is not None else None}
+        density = {}
+        for value in categories:
+            wg = sub.class_weight_g(value)
+            weights[value + "_g"] = float(wg) if wg is not None else None
+            a_px = class_area_px.get(value)
+            if wg is not None and a_px and px_per_mm:
+                a_mm2 = a_px / (px_per_mm ** 2)
+                density[value + "_g_per_mm2"] = round(float(wg) / a_mm2, 6) if a_mm2 else None
+
         coco["images"].append({
             "id": img_id,
             "file_name": sub.crop_image.name if sub.crop_image else "",
+            "raw_file_name": sub.raw_image.name if sub.raw_image else "",
             "width": w,
             "height": h,
             "commodity": sub.commodity.code,
             "mandi": sub.mandi.name if sub.mandi else "",
             "assayer": sub.assayer.get_full_name() or sub.assayer.username if sub.assayer else "",
+            # measured per-class weights (grams) — the training target
+            "weights": weights,
+            # absolute physical scale from the detected blue plate rim
+            "scale": {
+                "rim_detected": scale.get("rim_detected", False),
+                "px_per_mm": px_per_mm,
+                "rim_inner_r_px": scale.get("rim_inner_r_px"),
+                "rim_outer_r_px": scale.get("rim_outer_r_px"),
+                "rim_coverage": scale.get("rim_coverage"),
+                "plate_inner_diameter_mm": scale.get("plate_inner_diameter_mm"),
+            },
+            # per-class summed polygon areas + implied surface density
+            "class_pixel_areas": class_area_px,
+            "class_density": density,
+            # capture-device metadata for recalibration
+            "camera": q.get("camera") or {},
+            "tilt": q.get("tilt"),
+            "capture_quality": {k: q.get(k) for k in
+                ("mean_luminance", "sharpness", "ring_cover", "balance", "torch", "glare")
+                if k in q},
         })
         for p in labeled:
             flat = [c for pt in p.polygon for c in pt]

@@ -168,3 +168,90 @@ class DynamicClassFlowTests(TestCase):
         res = self.client.get(reverse("qc:review", kwargs={"pk": self.sub.id}))
         self.assertEqual(res.status_code, 200)
         self.assertContains(res, "Weevil damaged")
+
+
+class WeightsAndScaleTests(TestCase):
+    """Per-class weights, validation, and weight/scale data in the export."""
+
+    def setUp(self):
+        from decimal import Decimal
+        self.mandi = Mandi.objects.create(name="M2", district="D", state="S")
+        self.commodity = Commodity.objects.create(
+            code="GNUT", name="Groundnut",
+            extra_classes=[{"value": "weevil_damaged", "label": "Weevil damaged"}])
+        self.assayer = User.objects.create_user(
+            username="a2", password="x" * 12, role=Role.ASSAYER)
+        self.assayer.mandis.add(self.mandi)
+        self.sub = Submission.objects.create(
+            sample_number=2, assayer=self.assayer,
+            commodity=self.commodity, mandi=self.mandi)
+
+    def test_validate_measurements_dynamic(self):
+        from decimal import Decimal
+        from annotation.services import validate_measurements
+        weights = {"good": Decimal("200"), "broken": Decimal("30"),
+                   "foreign": Decimal("10"), "immature": Decimal("5"),
+                   "fungal": Decimal("3"), "weevil_damaged": Decimal("2")}
+        ok, errors, zeros = validate_measurements(Decimal("250"), weights)
+        self.assertTrue(ok, errors)
+        # sum exceeding total is rejected
+        weights["good"] = Decimal("260")
+        ok, errors, _ = validate_measurements(Decimal("250"), weights)
+        self.assertFalse(ok)
+        # a large unexplained gap is rejected
+        ok, errors, _ = validate_measurements(
+            Decimal("250"), {k: Decimal("1") for k in weights})
+        self.assertFalse(ok)
+
+    def test_class_weight_helpers_and_rows(self):
+        self.sub.total_weight_g = 250
+        self.sub.class_weights = {"good": "200.00", "weevil_damaged": "2.50"}
+        self.sub.save()
+        self.assertEqual(float(self.sub.class_weight_g("good")), 200.0)
+        self.assertEqual(float(self.sub.class_weight_g("weevil_damaged")), 2.5)
+        rows = self.sub.weight_rows()
+        self.assertEqual(len(rows), 6)          # 5 defaults + 1 extra
+        good = next(r for r in rows if r["value"] == "good")
+        self.assertEqual(good["pct"], 80.0)
+
+    def test_export_includes_weights_scale_and_density(self):
+        self.sub.total_weight_g = 250
+        self.sub.class_weights = {"good": "250.00"}
+        self.sub.status = SubmissionStatus.QC_APPROVED
+        self.sub.capture_quality_scores = {
+            "scale": {"rim_detected": True, "px_per_mm": 5.0,
+                      "rim_inner_r_px": 637.5, "plate_inner_diameter_mm": 255.0},
+            "camera": {"width": 4000}, "tilt": {"beta": 1.2, "gamma": -0.4},
+        }
+        self.sub.save()
+        Particle.objects.create(
+            submission=self.sub, particle_id=1, label="good",
+            polygon=[[0, 0], [100, 0], [100, 100], [0, 100]])   # 10,000 px²
+        coco, included = build_coco(self.commodity)
+        self.assertEqual(included, 1)
+        img = coco["images"][0]
+        self.assertEqual(img["weights"]["total_g"], 250.0)
+        self.assertEqual(img["weights"]["good_g"], 250.0)
+        self.assertEqual(img["scale"]["px_per_mm"], 5.0)
+        self.assertEqual(img["class_pixel_areas"]["good"], 10000.0)
+        # 10,000 px² / 25 px²·mm⁻² = 400 mm² → 250 g / 400 mm² = 0.625 g/mm²
+        self.assertAlmostEqual(img["class_density"]["good_g_per_mm2"], 0.625, places=4)
+        self.assertEqual(img["camera"]["width"], 4000)
+        self.assertEqual(img["tilt"]["beta"], 1.2)
+
+    def test_delete_guards(self):
+        admin = User.objects.create_user(username="ad2", password="x"*12, role=Role.ADMIN)
+        self.client.force_login(admin)
+        # commodity with a submission cannot be deleted
+        self.client.post(reverse("dashboard:commodity_delete", kwargs={"pk": self.commodity.id}))
+        self.assertTrue(Commodity.objects.filter(pk=self.commodity.pk).exists())
+        # a fresh commodity can
+        c2 = Commodity.objects.create(code="TMP", name="Temp")
+        self.client.post(reverse("dashboard:commodity_delete", kwargs={"pk": c2.id}))
+        self.assertFalse(Commodity.objects.filter(pk=c2.pk).exists())
+        # user with submissions cannot be deleted
+        self.client.post(reverse("dashboard:user_delete", kwargs={"pk": self.assayer.id}))
+        self.assertTrue(User.objects.filter(pk=self.assayer.pk).exists())
+        # admin cannot delete self
+        self.client.post(reverse("dashboard:user_delete", kwargs={"pk": admin.id}))
+        self.assertTrue(User.objects.filter(pk=admin.pk).exists())

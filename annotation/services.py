@@ -12,97 +12,80 @@ from .models import ParticleLabel, SubmissionStatus, CaptureMode
 
 
 # ── §3.3 measurement validation ───────────────────────────────────
-def validate_measurements(total, foreign, fungal, immature, organic):
-    """Return (ok, errors[], needs_zero_confirmation[])."""
-    errors = []
-    values = {
-        "total_weight_g": total,
-        "foreign_matter_g": foreign,
-        "fungal_grains_g": fungal,
-        "immature_grains_g": immature,
-        "organic_matter_g": organic,
-    }
+def validate_measurements(total, class_weights, class_labels=None):
+    """
+    Validate the total sample weight plus one measured weight PER CLASS of the
+    submission's commodity (dynamic — defaults + admin extras).
 
-    for field, v in values.items():
+    total: Decimal | None
+    class_weights: {class_value: Decimal | None}
+    class_labels: {class_value: display label} for messages
+
+    Returns (ok, errors[], needs_zero_confirmation[]).
+    The class weights must sum to (approximately) the total: every particle on
+    the plate belongs to exactly one class, so a gap larger than 2 % of the
+    total is treated as a weighing error.
+    """
+    labels = class_labels or {}
+    errors = []
+
+    def check(name, v):
         if v is None:
-            errors.append(f"{field} is mandatory.")
+            errors.append(f"{name} is mandatory.")
         elif v < 0:
-            errors.append(f"{field} must be ≥ 0.")
+            errors.append(f"{name} must be ≥ 0.")
         elif v > Decimal("999.99"):
-            errors.append(f"{field} exceeds the 999.99 g maximum.")
+            errors.append(f"{name} exceeds the 999.99 g maximum.")
+
+    check("Total sample weight", total)
+    for value, w in class_weights.items():
+        check(labels.get(value, value), w)
 
     if not errors:
-        defect_sum = foreign + fungal + immature + organic
-        if defect_sum > total:
+        wsum = sum(class_weights.values(), Decimal("0"))
+        if wsum > total:
             errors.append(
-                f"Defect categories sum to {defect_sum} g, which exceeds the "
-                f"total sample weight of {total} g."
-            )
+                f"Class weights sum to {wsum} g, which exceeds the total "
+                f"sample weight of {total} g.")
+        elif total > 0 and (total - wsum) > total * Decimal("0.02"):
+            errors.append(
+                f"Class weights sum to {wsum} g but the total is {total} g "
+                f"(gap {(total - wsum)} g > 2 %). Every particle belongs to a "
+                f"class — re-check the balance readings.")
 
-    # Zero values are allowed but require an explicit confirmation modal.
     needs_zero_confirmation = [
-        f for f in ("foreign_matter_g", "fungal_grains_g", "immature_grains_g", "organic_matter_g")
-        if values[f] is not None and values[f] == 0
+        v for v, w in class_weights.items() if w is not None and w == 0
     ]
-
-    return (len(errors) == 0, errors, needs_zero_confirmation)
-
-
-# ── §6.2 segmentation quality flags ───────────────────────────────
-def segmentation_flags(particle_count, merge_flagged_count, dark_fraction, expected_min):
-    flags = []
-    if particle_count < max(20, expected_min):
-        flags.append({
-            "code": "LOW_PARTICLE_COUNT",
-            "level": "warning",
-            "message": "Fewer particles than expected. Check plate fill.",
-        })
-    if particle_count and merge_flagged_count / particle_count >= 0.10:
-        flags.append({
-            "code": "MERGE_SUSPECTED",
-            "level": "orange",
-            "message": "Some particles may be merged. Review flagged regions.",
-        })
-    if dark_fraction > 0.05:
-        flags.append({
-            "code": "DARK_REGION",
-            "level": "warning",
-            "message": "Shadowed region detected. Particles may not segment correctly.",
-        })
-    return flags
+    return (not errors), errors, needs_zero_confirmation
 
 
-# ── §8.1 weight-vs-label cross-validation ─────────────────────────
 def cross_validate(submission):
     """
-    Compare each measured defect weight-fraction against the corresponding
-    labeled particle-fraction. A material mismatch is surfaced as an amber
-    note for the QC reviewer (not a hard block).
+    Compare each class's measured weight-fraction against its labeled
+    particle-fraction — for EVERY class of the submission's commodity
+    (defaults + extras). A material mismatch is surfaced as an amber note
+    for the QC reviewer (not a hard block).
     """
     warnings = []
     total = submission.particle_count
-    if total == 0:
+    if total == 0 or not submission.total_weight_g:
         return warnings
 
     dist = submission.label_distribution()
 
-    def label_pct(label):
-        return round(dist.get(label, 0) / total * 100, 1)
-
-    checks = [
-        ("foreign matter", float(submission.foreign_pct), label_pct(ParticleLabel.FOREIGN)),
-        ("fungal / infected", float(submission.fungal_pct), label_pct(ParticleLabel.FUNGAL)),
-        ("immature", float(submission.immature_pct), label_pct(ParticleLabel.IMMATURE)),
-    ]
-
-    for name, weight_pct, lbl_pct in checks:
+    for cls in submission.commodity.annotation_classes():
+        value, name = cls["value"], cls["label"]
+        weight_pct = submission.class_weight_pct(value)
+        if weight_pct is None:
+            continue
+        lbl_pct = round(dist.get(value, 0) / total * 100, 1)
         # 5 percentage-point tolerance band.
-        if abs(weight_pct - lbl_pct) > 5.0:
+        if abs(float(weight_pct) - lbl_pct) > 5.0:
             warnings.append({
                 "code": "WEIGHT_LABEL_MISMATCH",
                 "level": "amber",
                 "message": (
-                    f"Cross-validation: {name} weight is {weight_pct:.2f}% but "
+                    f"Cross-validation: {name} weight is {float(weight_pct):.2f}% but "
                     f"{lbl_pct:.1f}% of particles are labeled {name}. "
                     f"Confirm labeling reflects actual composition."
                 ),

@@ -19,6 +19,73 @@ logger = logging.getLogger(__name__)
 
 
 # ── Stage 1: plate isolation ──────────────────────────────────────
+def _fit_circle(pts):
+    """Kasa least-squares circle fit on Nx2 points → (cx, cy, r)."""
+    x, y = pts[:, 0].astype(float), pts[:, 1].astype(float)
+    A = np.c_[2 * x, 2 * y, np.ones(len(x))]
+    b = x ** 2 + y ** 2
+    sol, *_ = np.linalg.lstsq(A, b, rcond=None)
+    cx, cy = sol[0], sol[1]
+    return cx, cy, float(np.sqrt(sol[2] + cx ** 2 + cy ** 2))
+
+
+def detect_blue_rim(bgr):
+    """
+    Detect the standard plate's navy-blue rim and return its geometry, or
+    None when no credible rim is visible.
+
+    Because every capture uses the SAME physical plate, the rim diameter in
+    pixels gives an absolute px-per-mm scale for the image — the foundation
+    of camera-independent pixel→weight training data. A least-squares circle
+    fit handles rims that are partially cropped by the frame edge.
+
+    Returns {"cx","cy","r_in","r_out","rim_coverage","visible_frac"} in the
+    input image's pixel coordinates. r_in is the INNER rim edge — the plate's
+    usable surface; segmentation runs inside this circle.
+    """
+    h, w = bgr.shape[:2]
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, (95, 50, 15), (140, 255, 220))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    ys, xs = np.where(mask > 0)
+    if len(ys) < 0.005 * h * w:
+        return None
+    cx, cy, r_mid = _fit_circle(np.c_[xs, ys])
+    if not (0.30 * min(h, w) < r_mid < 0.75 * min(h, w)):
+        return None
+    if abs(cx - w / 2) > 0.20 * w or abs(cy - h / 2) > 0.20 * h:
+        return None
+
+    def cov(r):
+        pts = [(int(cx + r * np.cos(t)), int(cy + r * np.sin(t)))
+               for t in np.linspace(0, 2 * np.pi, 180, endpoint=False)]
+        inb = [(x, y) for x, y in pts if 0 <= x < w and 0 <= y < h]
+        if len(inb) < 60:
+            return 0.0, 0.0
+        return float(np.mean([mask[y, x] > 0 for x, y in inb])), len(inb) / 180
+
+    c_mid, vis = cov(r_mid)
+    if c_mid < 0.55 or vis < 0.45:
+        return None
+    r_in = r_mid
+    for r in np.arange(r_mid, r_mid * 0.72, -1.5):
+        c, _ = cov(r)
+        if c < 0.35:
+            r_in = r
+            break
+    r_out = r_mid
+    for r in np.arange(r_mid, r_mid * 1.25, 1.5):
+        c, v2 = cov(r)
+        if c < 0.35 and v2 > 0.3:
+            r_out = r
+            break
+        r_out = r
+    return {"cx": float(cx), "cy": float(cy), "r_in": float(r_in),
+            "r_out": float(r_out), "rim_coverage": round(c_mid, 3),
+            "visible_frac": round(vis, 3)}
+
+
 def isolate_plate(bgr, pre_cropped=False):
     """
     Detect the circular ceramic plate and return:
@@ -36,9 +103,24 @@ def isolate_plate(bgr, pre_cropped=False):
     h, w = bgr.shape[:2]
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
-    if pre_cropped:
+    # Preferred path for EVERY upload: find the plate's blue rim directly.
+    # It bounds segmentation exactly and yields the absolute px-per-mm scale.
+    rim = detect_blue_rim(bgr)
+    scale = {"rim_detected": bool(rim)}
+    if rim:
+        from django.conf import settings
+        cx, cy, r = int(rim["cx"]), int(rim["cy"]), int(rim["r_in"])
+        d_mm = float(getattr(settings, "PLATE_INNER_DIAMETER_MM", 300.0))
+        scale.update({
+            "cx": cx, "cy": cy,
+            "rim_inner_r_px": round(rim["r_in"], 1),
+            "rim_outer_r_px": round(rim["r_out"], 1),
+            "rim_coverage": rim["rim_coverage"],
+            "plate_inner_diameter_mm": d_mm,
+            "px_per_mm": round(2 * rim["r_in"] / d_mm, 4),
+        })
+    elif pre_cropped:
         cx, cy, r = w // 2, h // 2, int(min(h, w) * 0.5)
-        circles = None
     else:
         gray_blur = cv2.medianBlur(gray, 7)
         min_r = int(min(h, w) * 0.30)
@@ -69,7 +151,8 @@ def isolate_plate(bgr, pre_cropped=False):
     plate_pixels = gray[mask == 255]
     dark_fraction = float((plate_pixels < 40).mean()) if plate_pixels.size else 0.0
 
-    return crop, crop_mask, (int(cx), int(cy), int(r)), dark_fraction
+    # Plate centre expressed in CROP coordinates for downstream callers.
+    return crop, crop_mask, (int(cx) - x0, int(cy) - y0, int(r)), dark_fraction, scale
 
 
 # ── Stage 2 (primary): SAM2 ───────────────────────────────────────
@@ -288,8 +371,19 @@ def segment_image(bgr, commodity, pre_cropped=False):
         "merge_flagged_count": int,
       }
     """
-    crop, crop_mask, (cx, cy, r), dark_fraction = isolate_plate(bgr, pre_cropped=pre_cropped)
+    crop, crop_mask, (cx, cy, r), dark_fraction, scale = isolate_plate(bgr, pre_cropped=pre_cropped)
     ch, cw = crop.shape[:2]
+
+    # Detection runs on a bounded working copy for speed/parity; polygons are
+    # scaled back so ANNOTATIONS AND THE STORED CROP STAY AT FULL RESOLUTION.
+    from django.conf import settings as _st
+    work_max = int(getattr(_st, "SEG_WORKING_MAX_SIDE", 1100))
+    f = max(ch, cw) / work_max if max(ch, cw) > work_max else 1.0
+    if f > 1.0:
+        work = cv2.resize(crop, (int(round(cw / f)), int(round(ch / f))), interpolation=cv2.INTER_AREA)
+        work_mask = cv2.resize(crop_mask, (work.shape[1], work.shape[0]), interpolation=cv2.INTER_NEAREST)
+    else:
+        work, work_mask = crop, crop_mask
 
     min_area = commodity.min_particle_area_px
     plate_area = np.pi * (r ** 2)
@@ -304,14 +398,14 @@ def segment_image(bgr, commodity, pre_cropped=False):
 
     if remote:
         # Cheapest GPU path: offload only segmentation to a scale-to-zero worker.
-        polys = _segment_remote(crop, remote, min_area, max_area)
+        polys = _segment_remote(work, remote, min_area, max_area)
         engine = "sam2-remote"
     elif sam2_loader.available() and sam2_loader.get_mask_generator() is not None:
         if getattr(settings, "SAM2_TILES", False):
-            polys = _segment_sam2_tiled(crop, crop_mask, min_area, max_area)
+            polys = _segment_sam2_tiled(work, work_mask, min_area, max_area)
             engine = "sam2-tiled"
         else:
-            binaries = _segment_sam2(crop, crop_mask, min_area, max_area)
+            binaries = _segment_sam2(work, work_mask, min_area, max_area)
     else:
         # SAM2 could not load (and we're not offloading remotely).
         if settings.SAM2_ENABLED and settings.SAM2_REQUIRED:
@@ -326,13 +420,13 @@ def segment_image(bgr, commodity, pre_cropped=False):
         # Either SAM2 is not required (fallback permitted), or SAM2 ran but
         # returned no usable masks for this image — use watershed so the
         # assayer is never blocked by an empty result.
-        binaries = _segment_watershed(crop, crop_mask, min_area, max_area)
+        binaries = _segment_watershed(work, work_mask, min_area, max_area)
         engine = "watershed"
 
     # Build particles from whichever representation we have (masks or polygons).
     def _mask_iter():
         if polys is not None:
-            ch2, cw2 = crop.shape[:2]
+            ch2, cw2 = work.shape[:2]
             for poly in polys:
                 m = np.zeros((ch2, cw2), np.uint8)
                 cv2.fillPoly(m, [poly.astype(np.int32)], 255)
@@ -343,10 +437,16 @@ def segment_image(bgr, commodity, pre_cropped=False):
 
     particles, merge_flagged = [], 0
     for seg in _mask_iter():
-        result = _mask_to_polygon_and_features(seg, crop)
+        result = _mask_to_polygon_and_features(seg, work)
         if result is None:
             continue
         polygon, features, flagged = result
+        if f > 1.0:
+            # Scale geometry back up to the full-resolution crop.
+            polygon = [[round(x * f, 1), round(y * f, 1)] for x, y in polygon]
+            for k, mult in (("area", f * f), ("perimeter", f)):
+                if k in features:
+                    features[k] = round(features[k] * mult, 1)
         if flagged:
             merge_flagged += 1
         particles.append({
@@ -367,4 +467,5 @@ def segment_image(bgr, commodity, pre_cropped=False):
         "particles": particles,
         "dark_fraction": round(dark_fraction, 4),
         "merge_flagged_count": merge_flagged,
+        "scale": scale,
     }
