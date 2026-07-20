@@ -120,6 +120,7 @@ def review(request, pk):
         "particles_json": json.dumps(_review_payload(sub)),
         "labels_json": json.dumps(labels),
         "label_rows": label_rows,
+        "weight_rows": sub.weight_rows(),
         "total_particles": sub.particle_count,
         "crop_size": sub.capture_quality_scores.get("crop_size", [1000, 1000]),
         "can_decide": sub.status in [SubmissionStatus.PENDING_QC, SubmissionStatus.REWORK_REQUESTED],

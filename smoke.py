@@ -55,8 +55,9 @@ step(f"manual capture rejected ({rm.status_code})", rm.status_code==400); sub2.d
 # 3. measurements (STEP 2) - save & annotate later
 r = c.get(f"/annotate/{sub_id}/measurements/"); step(f"measurements page ({r.status_code})", r.status_code==200)
 r = c.post(f"/annotate/{sub_id}/measurements/", {
-    "total_weight_g":"250.00","foreign_matter_g":"12.50","fungal_grains_g":"8.20",
-    "immature_grains_g":"18.40","organic_matter_g":"4.10","action":"later"})
+    "total_weight_g":"250.00","weight_good":"200.00","weight_broken":"10.90",
+    "weight_foreign":"12.50","weight_fungal":"8.20","weight_immature":"18.40",
+    "action":"later"})
 step(f"save & later -> 302 workspace ({r.status_code})", r.status_code==302 and r.url.endswith("/annotate/"))
 sub.refresh_from_db(); step("measurements saved", sub.measurements_done and float(sub.total_weight_g)==250.0)
 

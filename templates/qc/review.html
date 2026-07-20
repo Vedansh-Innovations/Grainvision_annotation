@@ -44,10 +44,9 @@
       <div class="legend-row"><span class="muted">Assayer</span><span>{{ submission.assayer.get_full_name|default:submission.assayer.username }}</span></div>
       <div class="legend-row"><span class="muted">Mandi</span><span>{{ submission.mandi.name }}</span></div>
       <div class="legend-row"><span class="muted">Total weight</span><span>{{ submission.total_weight_g }} g</span></div>
-      <div class="legend-row"><span class="muted">Foreign matter</span><span>{{ submission.foreign_matter_g }} g ({{ submission.foreign_pct }}%)</span></div>
-      <div class="legend-row"><span class="muted">Fungal / infected</span><span>{{ submission.fungal_grains_g }} g ({{ submission.fungal_pct }}%)</span></div>
-      <div class="legend-row"><span class="muted">Immature grains</span><span>{{ submission.immature_grains_g }} g ({{ submission.immature_pct }}%)</span></div>
-      <div class="legend-row"><span class="muted">Organic matter</span><span>{{ submission.organic_matter_g }} g ({{ submission.organic_pct }}%)</span></div>
+      {% for w in weight_rows %}
+      <div class="legend-row"><span class="muted"><span class="dot" style="background:{{ w.color }};display:inline-block"></span> {{ w.label }}</span><span>{{ w.weight_g|default:"—" }} g ({{ w.pct|default:"–" }}%)</span></div>
+      {% endfor %}
     </div>
 
     <div class="card">

@@ -264,15 +264,17 @@
     requestAnimationFrame(tick);
   }
 
-  function blobOf(canvas){ return new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.95)); }
+  function blobOf(canvas){ return new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.97)); }
 
   async function capture(scores){
     capturing = true;
     document.getElementById('uploadStatus').style.display='block';
-    // Crop to the guide: a centred square at 86% of the frame's short side
-    // (guide diameter is 84%), so countertop/background is dropped at source.
+    // Crop to the FULL centre square of the frame. The blue plate rim sits
+    // just outside the guide circle (84%), so the full square keeps the rim
+    // visible — the server detects it for exact segmentation bounds and the
+    // px-per-mm scale (pixel→weight calibration).
     const vw = video.videoWidth || 1200, vh = video.videoHeight || 1200;
-    const side = Math.floor(Math.min(vw, vh) * 0.86);
+    const side = Math.min(vw, vh);
     const sx = Math.floor((vw - side) / 2), sy = Math.floor((vh - side) / 2);
     const full = document.createElement('canvas');
     full.width = side; full.height = side;
@@ -284,10 +286,12 @@
       ring_cover: scores ? +scores.ringCover.toFixed(2) : null,
       ring_median: scores ? +scores.ringMedian.toFixed(0) : null,
       torch: torchOn,
+      tilt: lastTilt,
+      camera: cameraMeta,
       quad_spread: scores ? +scores.quadSpread.toFixed(1) : null,
       balance: scores ? +scores.balance.toFixed(1) : null,
       sharpness: scores ? +scores.sharp.toFixed(1) : null,
-      exif: { captured:true, color_space:'sRGB', width:side, height:side, cropped_to_guide:true }
+      exif: { captured:true, color_space:'sRGB', width:side, height:side, cropped_to_guide:true, crop_fraction:1.0 }
     });
   }
 
@@ -305,6 +309,15 @@
   // Supported on Android Chrome; iOS Safari exposes no torch control, so the
   // button stays hidden there and everything else works as before.
   let torchTrack = null, torchOn = false;
+  // Device tilt (for recalibration metadata): latest orientation sample.
+  let lastTilt = null;
+  window.addEventListener('deviceorientation', e => {
+    if (e.beta === null && e.gamma === null) return;
+    lastTilt = { beta: e.beta === null ? null : +e.beta.toFixed(2),
+                 gamma: e.gamma === null ? null : +e.gamma.toFixed(2),
+                 alpha: e.alpha === null ? null : +e.alpha.toFixed(2) };
+  });
+  let cameraMeta = {};
   const torchBtn = document.getElementById('torchBtn');
   async function setTorch(on){
     if (!torchTrack) return;
@@ -317,11 +330,21 @@
   }
   torchBtn.addEventListener('click', () => setTorch(!torchOn));
 
-  navigator.mediaDevices?.getUserMedia({ video: { facingMode:'environment', width:{ideal:1920} } })
+  navigator.mediaDevices?.getUserMedia({ video: { facingMode:'environment', width:{ideal:4096}, height:{ideal:4096} } })
     .then(stream => {
       video.srcObject = stream;
       const track = stream.getVideoTracks()[0];
       const caps = (track.getCapabilities ? track.getCapabilities() : {}) || {};
+      const st = (track.getSettings ? track.getSettings() : {}) || {};
+      cameraMeta = {
+        width: st.width || null, height: st.height || null,
+        frame_rate: st.frameRate || null, facing_mode: st.facingMode || null,
+        device_label: (track.label || null),
+        zoom: st.zoom !== undefined ? st.zoom : null,
+        focus_distance: st.focusDistance !== undefined ? st.focusDistance : null,
+        focal_length_capability: caps.focalLength || null,   // rarely exposed by browsers
+        user_agent: navigator.userAgent,
+      };
       if (caps.torch){
         torchTrack = track;
         torchBtn.style.display = 'inline-flex';

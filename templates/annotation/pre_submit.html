@@ -41,10 +41,9 @@
     <div class="card">
       <div class="card-title">Recorded weights</div>
       <div class="legend-row"><span><span class="dot" style="background:#95A5A6"></span>Total sample</span><strong>{{ submission.total_weight_g }} g</strong></div>
-      <div class="legend-row"><span><span class="dot" style="background:var(--label-foreign)"></span>Foreign matter</span><span>{{ submission.foreign_matter_g }} g <span class="muted small">({{ submission.foreign_pct }}%)</span></span></div>
-      <div class="legend-row"><span><span class="dot" style="background:var(--label-fungal)"></span>Fungal / infected</span><span>{{ submission.fungal_grains_g }} g <span class="muted small">({{ submission.fungal_pct }}%)</span></span></div>
-      <div class="legend-row"><span><span class="dot" style="background:var(--label-immature)"></span>Immature grains</span><span>{{ submission.immature_grains_g }} g <span class="muted small">({{ submission.immature_pct }}%)</span></span></div>
-      <div class="legend-row"><span><span class="dot" style="background:var(--label-broken)"></span>Organic matter</span><span>{{ submission.organic_matter_g }} g <span class="muted small">({{ submission.organic_pct }}%)</span></span></div>
+      {% for w in weight_rows %}
+      <div class="legend-row"><span><span class="dot" style="background:{{ w.color }}"></span>{{ w.label }}</span><span>{{ w.weight_g|default:"—" }} g <span class="muted small">({{ w.pct|default:"–" }}%)</span></span></div>
+      {% endfor %}
     </div>
 
     <!-- Particle labels -->

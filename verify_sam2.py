@@ -25,7 +25,7 @@ class C:
 
 log("running segment_image (SAM2)…")
 t = time.time()
-res = segmentation.segment_image(img, C())
+res = segmentation.segment_image(img, C())  # returns scale info too
 dt = time.time() - t
 log(f"engine    : {res['engine']}")
 log(f"particles : {len(res['particles'])}")

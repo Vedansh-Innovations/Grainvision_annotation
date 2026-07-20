@@ -12,7 +12,7 @@
       <div class="card-title" style="margin:0">Physiochemical measurements</div>
       <span class="badge badge-approved">&check; Photo captured</span>
     </div>
-    <p class="muted small">Enter the five weighed fractions in grams (two decimals). The defect fractions must not exceed the total sample weight (PRD &sect;3).</p>
+    <p class="muted small">Weigh each class of <strong>{{ submission.commodity.name }}</strong> separately and enter the grams (two decimals). Every particle belongs to one class, so the class weights must add up to the total sample weight.</p>
 
     <form method="post" action="{% url 'annotation:measurements' pk=submission.id %}" id="mform">
       {% csrf_token %}
@@ -22,30 +22,17 @@
           <div class="input-suffix"><input name="total_weight_g" id="f_total" inputmode="decimal" value="{{ post.total_weight_g|default:'' }}" required><span class="suffix">g</span></div>
         </div>
         <div></div>
+        {% for c in classes %}
         <div>
-          <label class="field">Foreign matter (g)</label>
-          <div class="input-suffix"><input name="foreign_matter_g" id="f_foreign" inputmode="decimal" value="{{ post.foreign_matter_g|default:'' }}" required><span class="suffix">g</span></div>
-          <div class="pct muted small" id="p_foreign"></div>
+          <label class="field"><span class="dot" style="background:{{ c.color }};display:inline-block;vertical-align:middle;margin-right:6px"></span>{{ c.label }} (g)</label>
+          <div class="input-suffix"><input name="weight_{{ c.value }}" class="wfield" data-value="{{ c.value }}" inputmode="decimal" value="{% for k,v in post.items %}{% if k == 'weight_'|add:c.value %}{{ v }}{% endif %}{% endfor %}" required><span class="suffix">g</span></div>
+          <div class="pct muted small" id="p_{{ c.value }}"></div>
         </div>
-        <div>
-          <label class="field">Fungal / infected (g)</label>
-          <div class="input-suffix"><input name="fungal_grains_g" id="f_fungal" inputmode="decimal" value="{{ post.fungal_grains_g|default:'' }}" required><span class="suffix">g</span></div>
-          <div class="pct muted small" id="p_fungal"></div>
-        </div>
-        <div>
-          <label class="field">Immature grains (g)</label>
-          <div class="input-suffix"><input name="immature_grains_g" id="f_immature" inputmode="decimal" value="{{ post.immature_grains_g|default:'' }}" required><span class="suffix">g</span></div>
-          <div class="pct muted small" id="p_immature"></div>
-        </div>
-        <div>
-          <label class="field">Organic matter (g)</label>
-          <div class="input-suffix"><input name="organic_matter_g" id="f_organic" inputmode="decimal" value="{{ post.organic_matter_g|default:'' }}" required><span class="suffix">g</span></div>
-          <div class="pct muted small" id="p_organic"></div>
-        </div>
+        {% endfor %}
       </div>
 
-      <div class="banner banner-info mt small" id="sumline">Defect sum: 0.00 g &middot; Estimated good grain: 0.00 g</div>
-      <div class="banner banner-error mt small" id="sumerr" style="display:none">Defect fractions exceed the total sample weight.</div>
+      <div class="banner banner-info mt small" id="sumline">Class sum: 0.00 g of 0.00 g total</div>
+      <div class="banner banner-error mt small" id="sumerr" style="display:none">Class weights must add up to the total (within 2%).</div>
 
       <input type="hidden" name="action" id="action" value="annotate">
       <div class="flex-between mt">
@@ -75,32 +62,34 @@
 <script>
 (function(){
   const f = id => document.getElementById(id);
-  const fields = ['total','foreign','fungal','immature','organic'];
   const num = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+  const wfields = Array.from(document.querySelectorAll('.wfield'));
 
   function recompute(){
     const total = num(f('f_total').value);
-    const defects = ['foreign','fungal','immature','organic'].reduce((a,k)=>a+num(f('f_'+k).value),0);
-    ['foreign','fungal','immature','organic'].forEach(k=>{
-      const v = num(f('f_'+k).value);
-      f('p_'+k).textContent = total>0 ? (v/total*100).toFixed(1)+'% of sample' : '';
+    let sum = 0;
+    wfields.forEach(inp=>{
+      const v = num(inp.value); sum += v;
+      const p = f('p_'+inp.dataset.value);
+      if (p) p.textContent = total>0 ? (v/total*100).toFixed(1)+'% of sample' : '';
     });
-    f('sumline').textContent = 'Defect sum: ' + defects.toFixed(2) + ' g \u00b7 Estimated good grain: ' + Math.max(0,total-defects).toFixed(2) + ' g';
-    f('sumerr').style.display = defects>total && total>0 ? 'block' : 'none';
+    f('sumline').textContent = 'Class sum: ' + sum.toFixed(2) + ' g of ' + total.toFixed(2) + ' g total';
+    const bad = total>0 && (sum > total || (total-sum) > total*0.02);
+    f('sumerr').style.display = bad ? 'block' : 'none';
+    return bad;
   }
-  fields.forEach(k=>f('f_'+k).addEventListener('input', recompute));
+  f('f_total').addEventListener('input', recompute);
+  wfields.forEach(inp=>inp.addEventListener('input', recompute));
   recompute();
 
   const form = f('mform');
   let confirmedZero = false;
   form.addEventListener('submit', function(e){
-    const anyZero = ['total','foreign','fungal','immature','organic'].some(k=>{
-      const val = f('f_'+k).value.trim();
+    if (recompute()){ e.preventDefault(); return; }
+    const anyZero = [f('f_total'), ...wfields].some(inp=>{
+      const val = inp.value.trim();
       return val !== '' && num(val) === 0;
     });
-    const total = num(f('f_total').value);
-    const defects = ['foreign','fungal','immature','organic'].reduce((a,k)=>a+num(f('f_'+k).value),0);
-    if (defects>total && total>0){ e.preventDefault(); f('sumerr').style.display='block'; return; }
     if (anyZero && !confirmedZero){ e.preventDefault(); f('zeroModal').style.display='flex'; }
   });
   f('zeroCancel').onclick = ()=> f('zeroModal').style.display='none';

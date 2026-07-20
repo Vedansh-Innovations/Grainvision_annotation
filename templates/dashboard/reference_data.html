@@ -49,6 +49,10 @@
                 <form method="post" action="{% url 'dashboard:mandi_toggle' pk=row.obj.id %}" style="display:inline">
                   {% csrf_token %}<button class="btn small" type="submit">{% if row.obj.active %}Deactivate{% else %}Activate{% endif %}</button>
                 </form>
+                <form method="post" action="{% url 'dashboard:mandi_delete' pk=row.obj.id %}" style="display:inline"
+                      onsubmit="return confirm('Permanently delete mandi “{{ row.obj.name }}”? Only possible while no submissions reference it.')">
+                  {% csrf_token %}<button class="btn small" type="submit" style="color:#C0392B">Delete</button>
+                </form>
               </td>
             </tr>
           {% empty %}
@@ -94,6 +98,10 @@
               <td>
                 <form method="post" action="{% url 'dashboard:commodity_toggle' pk=r.obj.id %}" style="display:inline">
                   {% csrf_token %}<button class="btn small" type="submit">{% if r.obj.active %}Deactivate{% else %}Activate{% endif %}</button>
+                </form>
+                <form method="post" action="{% url 'dashboard:commodity_delete' pk=r.obj.id %}" style="display:inline"
+                      onsubmit="return confirm('Permanently delete commodity “{{ r.obj.name }}”? Only possible while no submissions reference it.')">
+                  {% csrf_token %}<button class="btn small" type="submit" style="color:#C0392B">Delete</button>
                 </form>
               </td>
             </tr>
