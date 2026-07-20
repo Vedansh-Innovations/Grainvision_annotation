@@ -478,7 +478,11 @@ def commodity_add_class(request, pk):
     if not value:
         messages.error(request, "Class name must contain letters or numbers.")
         return redirect("dashboard:reference_data")
-    if value in RESERVED_CLASS_VALUES:
+    # Reject names that collide with a built-in class by value OR by label
+    # (e.g. "Good grain" slugs to "good_grain", but it still means "good").
+    from core.models import DEFAULT_ANNOTATION_CLASSES
+    default_slugs = {class_value_from_name(c["label"]) for c in DEFAULT_ANNOTATION_CLASSES}
+    if value in RESERVED_CLASS_VALUES or value in default_slugs:
         messages.error(
             request,
             f"“{name}” clashes with a built-in class — the five defaults are "
