@@ -100,7 +100,7 @@
 <script>
 (function(){
   const CROP = {{ crop_size|safe }};
-  const cropImg = "{{ submission.crop_image.url|safe }}";
+  const cropImg = "{% if submission.crop_image %}{{ submission.crop_image.url|safe }}{% endif %}";
   const canDecide = {{ can_decide|yesno:"true,false" }};
   let particles = JSON.parse(document.getElementById('particles-data').textContent);
   const labels = JSON.parse(document.getElementById('labels-data').textContent);
